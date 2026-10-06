@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      DB_PATH: /app/data/bookmark-s.sqlite
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - bookmark_data:/app/data
+
+volumes:
+  bookmark_data:

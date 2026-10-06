@@ -1,0 +1,45 @@
+{
+  "name": "bookmark-s",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A small, thoughtfully designed home for your bookmarks.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,cyan \"tsx watch server/node.ts\" \"vite --host 0.0.0.0\"",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server/node.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test server/*.test.ts",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:deploy": "npm run build && wrangler deploy",
+    "cf:db:create": "wrangler d1 create bookmark-s",
+    "cf:db:migrate:local": "wrangler d1 migrations apply bookmark-s --local",
+    "cf:db:migrate": "wrangler d1 migrations apply bookmark-s --remote",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "dotenv": "^17.2.3",
+    "hono": "^4.10.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.0",
+    "wrangler": "^4.50.0"
+  }
+}

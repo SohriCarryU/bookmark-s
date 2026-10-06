@@ -1,0 +1,15 @@
+node_modules
+dist
+data
+backups
+.git
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+.wrangler
+coverage
+*.log
+artifacts
+test-results
+playwright-report

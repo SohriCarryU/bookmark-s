@@ -1,0 +1,101 @@
+import { expect, test } from '@playwright/test';
+
+test('visitor can find bookmarks, follow a link and see its persisted click count', async ({ page, context }) => {
+  await context.route('https://github.com/**', route => route.fulfill({ body: 'Example external site' }));
+  await page.goto('/');
+  await expect(page.locator('.bookmark-card')).toHaveCount(21);
+  await page.getByRole('button', { name: /开发工具/ }).first().click();
+  await expect(page.locator('.bookmark-card')).toHaveCount(4);
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('GitHub');
+  await expect(page.locator('.bookmark-card')).toHaveCount(1);
+  const before = await page.locator('.click-count').getAttribute('title');
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('link', { name: '打开 GitHub（新标签页）' }).click();
+  const popup = await popupPromise;
+  await expect(page.locator('.click-count')).not.toHaveAttribute('title', before!);
+  const after = await page.locator('.click-count').getAttribute('title');
+  await popup.close();
+  await page.reload();
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('GitHub');
+  await expect(page.locator('.click-count')).toHaveAttribute('title', after!);
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('no-such-bookmark-123');
+  await expect(page.getByText('还没有找到相关收藏')).toBeVisible();
+});
+
+test('recommendation, approval, folder creation and bookmark management work end to end', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('button', { name: '分享一个好网站', exact: true }).click();
+  await page.getByLabel('网站名称').fill('E2E 推荐网站');
+  await page.getByLabel('网站链接').fill('https://example.org/bookmark-s-recommendation');
+  await page.getByLabel('一句话介绍', { exact: false }).fill('来自游客的有用发现');
+  await page.getByRole('button', { name: '提交分享', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.bookmark-card')).toHaveCount(21);
+
+  await page.getByRole('button', { name: '管理员登录' }).click();
+  await page.getByLabel('管理员账号').fill('admin');
+  await page.getByLabel('密码', { exact: true }).fill('incorrect-password');
+  await page.getByRole('button', { name: '登录管理' }).click();
+  await expect(page.getByRole('alert')).toContainText('用户名或密码不正确');
+  await page.getByLabel('密码', { exact: true }).fill('bookmark-s-e2e-password');
+  await page.getByRole('button', { name: '登录管理' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: /分享收件箱/ }).click();
+  await expect(page.getByRole('link', { name: 'E2E 推荐网站' })).toBeVisible();
+  await page.getByRole('button', { name: '通过并收藏' }).click();
+  await expect(page.getByText('暂时没有待审核的分享')).toBeVisible();
+  await page.getByRole('button', { name: '关闭弹窗' }).click();
+
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E 推荐网站');
+  await expect(page.locator('.bookmark-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '置顶 E2E 推荐网站', exact: true }).click();
+  await expect(page.locator('.bookmark-card .pin-badge')).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '添加书签', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E 推荐网站');
+  await expect(page.locator('.pin-badge')).toHaveCount(1);
+  await page.getByRole('button', { name: '编辑 E2E 推荐网站' }).click();
+  await page.getByLabel('网站名称').fill('E2E 已编辑网站');
+  await page.getByRole('button', { name: '保存修改' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E 已编辑网站');
+  await expect(page.locator('.bookmark-card')).toHaveCount(1);
+
+  await page.getByRole('button', { name: '新建文件夹', exact: true }).click();
+  await page.getByLabel('文件夹名称').fill('测试文件夹');
+  await page.getByLabel('文件夹颜色').selectOption({ label: '晴空蓝' });
+  await page.getByRole('button', { name: '创建文件夹' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('');
+  await page.getByRole('button', { name: '添加书签', exact: true }).click();
+  await page.getByLabel('网站名称').fill('E2E 管理员收藏');
+  await page.getByLabel('网站链接').fill('https://example.org/bookmark-s-admin');
+  await page.getByRole('dialog').getByRole('button', { name: '添加书签', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: '打开 E2E 管理员收藏（新标签页）' })).toBeVisible();
+  await page.getByRole('button', { name: '删除 E2E 管理员收藏' }).click();
+  await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.bookmark-card')).toHaveCount(0);
+  await page.getByRole('button', { name: '退出', exact: true }).click();
+  await expect(page.getByRole('button', { name: '管理员登录' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('mobile drawer and share dialog remain accessible without page overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.bookmark-card').first()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await page.getByRole('button', { name: '展开导航' }).click();
+  await page.getByRole('button', { name: '分享一个好网站', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '分享一个好网站' })).toBeVisible();
+  await expect(page.getByLabel('网站名称')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal-dialog')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: '展开导航' })).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden');
+});
