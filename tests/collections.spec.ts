@@ -50,7 +50,7 @@ async function createBookmark(title: string, tags: string[], categoryIds = ['dev
   return (await response.json()).bookmark;
 }
 async function folder(page: Page, name: string) {
-  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: new RegExp(name) }).click();
+  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: new RegExp(`^${name}`) }).click();
 }
 async function allBookmarks(page: Page) {
   await page.getByRole('button', { name: /^全部书签/ }).click();

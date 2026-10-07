@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, Clock3, History, LoaderCircle, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { api, messageOf } from "./api";
+import { CategoryIcon, getFolderIcon } from "./folderIcons";
+import type { Category } from "./types";
 import type { OperationBookmark, OperationChange, OperationDetail, OperationList, OperationSummary } from "./types";
 import "./settings.css";
 import "./operations.css";
@@ -9,12 +11,20 @@ const actions = [
   ["create", "添加书签"], ["edit", "编辑书签"], ["delete", "删除书签"],
   ["pin", "调整置顶"], ["batch_tags", "批量编辑标签"], ["approve", "通过网站推荐"],
   ["tag_rename", "重命名标签"], ["tag_delete", "删除标签"], ["revert", "回退操作"],
+  ["category_edit", "编辑文件夹"], ["category_delete", "删除文件夹"],
 ] as const;
 const actionNames = Object.fromEntries(actions);
 const pageSize = 20;
 
 function actionName(action: string) {
   return actionNames[action] ?? "书签变更";
+}
+
+function operationTitle(operation: OperationSummary) {
+  if (operation.categoryNames?.length) return operation.categoryNames.join("、");
+  if (operation.action.startsWith("category_")) return "文件夹变更";
+  if (operation.bookmarkCount === 1) return operation.bookmarkTitles[0] ?? "1 个书签";
+  return operation.bookmarkCount > 1 ? `${operation.bookmarkCount} 个书签` : "标签变更";
 }
 
 function displayTime(value: string) {
@@ -71,11 +81,25 @@ function BookmarkChange({ change, initiallyOpen }: { change: OperationChange; in
 
 function revertDescription(operation: OperationSummary) {
   const count = operation.bookmarkCount;
+  if (operation.action === "category_edit") return "将恢复文件夹之前的名称、图标和颜色。";
+  if (operation.action === "category_delete") return `将恢复被删文件夹，以及 ${count} 个书签和相关网站推荐的原有归属。`;
+  if (operation.categoryNames?.length && operation.action === "revert") return `将撤销这次回退，恢复文件夹及 ${count} 个书签之前的状态。`;
   if (operation.action === "create" || operation.action === "approve") return `将移除本次新增的 ${count} 个书签。`;
   if (operation.action === "delete") return `将恢复本次删除的 ${count} 个书签。`;
   if (operation.action === "pin") return `将恢复 ${count} 个书签之前的置顶状态。`;
   if (operation.action === "batch_tags") return `将恢复 ${count} 个书签之前的标签。`;
   return `将恢复本次操作之前的内容，影响 ${count} 个书签。`;
+}
+
+function CategorySnapshot({ category, label }: { category: Category | null; label: string }) {
+  return <div className={label === "变更前" ? "operations-before" : "operations-after"}>
+    <span className="operations-value-label">{label}</span>
+    {category ? <>
+      <p className="operations-category-name"><span style={{ color: category.color }}><CategoryIcon name={category.icon} size={18} /></span>{category.name}</p>
+      <p className="operations-category-meta">图标：{getFolderIcon(category.icon).label}</p>
+      <p className="operations-category-meta">颜色：<span className="operations-color-swatch" style={{ background: category.color }} />{category.color}</p>
+    </> : <p>{label === "变更前" ? "尚未创建" : "已删除"}</p>}
+  </div>;
 }
 
 export default function OperationsPage({ onChanged, onNotify }: {
@@ -223,7 +247,7 @@ export default function OperationsPage({ onChanged, onNotify }: {
         {loading || filtering ? <div className="settings-list-status"><LoaderCircle className="spin" size={18} />正在读取操作记录…</div> : error ? <div className="settings-list-error"><p className="form-error" role="alert">{error}</p><button type="button" className="secondary-button" onClick={() => void loadList()}>重新加载操作记录</button></div> : !result?.operations.length ? <div className="operations-empty"><History size={27} /><h3>{hasFilters ? "没有找到符合条件的操作记录" : "还没有操作记录"}</h3><p>{hasFilters ? "调整关键词、操作类型或操作人后再试。" : "之后添加、编辑或删除书签时，变更会记录在这里。"}</p></div> : <>
           <ol className="operations-list">
             {result.operations.map((operation) => <li key={operation.id}><article className={`operations-row${selectedId === operation.id ? " selected" : ""}`} aria-label={`操作记录 ${operation.id}`}>
-              <div className="operations-row-main"><div className="operations-row-heading"><span className="operations-action-badge">{actionName(operation.action)}</span><span className="operations-actor" title={operation.actorName}>@{operation.actorName}</span></div><h3>{operation.bookmarkCount === 1 ? operation.bookmarkTitles[0] ?? "1 个书签" : operation.bookmarkCount > 1 ? `${operation.bookmarkCount} 个书签` : "标签变更"}</h3>{operation.bookmarkCount > 1 && operation.bookmarkTitles.length > 0 && <p className="operations-bookmark-preview">{operation.bookmarkTitles.slice(0, 3).join("、")}{operation.bookmarkCount > 3 ? "…" : ""}</p>}<div className="operations-row-meta"><time dateTime={operation.createdAt}>{displayTime(operation.createdAt)}</time><span className={`operations-status${operation.revertedAt ? " reverted" : ""}`}>{operation.revertedAt ? `已由 ${operation.revertedBy ?? "管理员"} 回退` : operation.revertOf ? "回退记录" : "未回退"}</span></div></div>
+              <div className="operations-row-main"><div className="operations-row-heading"><span className="operations-action-badge">{actionName(operation.action)}</span><span className="operations-actor" title={operation.actorName}>@{operation.actorName}</span></div><h3>{operationTitle(operation)}</h3>{operation.bookmarkCount > 1 && operation.bookmarkTitles.length > 0 && <p className="operations-bookmark-preview">{operation.bookmarkTitles.slice(0, 3).join("、")}{operation.bookmarkCount > 3 ? "…" : ""}</p>}<div className="operations-row-meta"><time dateTime={operation.createdAt}>{displayTime(operation.createdAt)}</time><span className={`operations-status${operation.revertedAt ? " reverted" : ""}`}>{operation.revertedAt ? `已由 ${operation.revertedBy ?? "管理员"} 回退` : operation.revertOf ? "回退记录" : "未回退"}</span></div></div>
               <button type="button" className="secondary-button" disabled={reverting} aria-expanded={selectedId === operation.id} onClick={() => setSelectedId((current) => current === operation.id ? null : operation.id)}>{selectedId === operation.id ? "收起详情" : "查看详情"}</button>
             </article></li>)}
           </ol>
@@ -236,8 +260,9 @@ export default function OperationsPage({ onChanged, onNotify }: {
         {detailLoading ? <div className="settings-list-status" role="status"><LoaderCircle className="spin" size={18} />正在加载变更详情…</div> : detailError ? <div className="settings-list-error"><p className="form-error" role="alert">{detailError}</p><button type="button" className="secondary-button" onClick={() => void loadDetail(selectedId)}>重新加载操作详情</button></div> : detail && activeOperation && <>
           <p className="operations-detail-count">本次操作涉及 {detail.operation.bookmarkCount} 个书签{detail.changes.length > 1 ? "，展开书签可查看具体变化。" : "。"}</p>
           {!!detail.tagChanges?.length && <section className="operations-tag-changes" aria-label="标签变更"><h3>标签变更</h3>{detail.tagChanges.map((change, index) => <div className="operations-change-pair" key={index}><div className="operations-before"><span className="operations-value-label">变更前</span><p>{change.before ? `#${change.before.name}` : "尚未创建"}</p></div><div className="operations-after"><span className="operations-value-label">变更后</span><p>{change.after ? `#${change.after.name}` : "已删除"}</p></div></div>)}</section>}
+          {!!detail.categoryChanges?.length && <section className="operations-category-changes" aria-label="文件夹变更"><h3>文件夹变更</h3>{detail.categoryChanges.map((change, index) => <div className="operations-change-pair" key={index}><CategorySnapshot category={change.before} label="变更前" /><CategorySnapshot category={change.after} label="变更后" /></div>)}</section>}
           <div className="operations-bookmark-changes">{detail.changes.map((change) => <BookmarkChange key={change.bookmarkId} change={change} initiallyOpen={detail.changes.length === 1} />)}</div>
-          {!detail.changes.length && !detail.tagChanges?.length && <p className="operations-detail-note">这条记录没有关联的书签内容变化。</p>}
+          {!detail.changes.length && !detail.tagChanges?.length && !detail.categoryChanges?.length && <p className="operations-detail-note">这条记录没有关联的书签内容变化。</p>}
           {revertError && <p className="form-error" role="alert">{revertError}</p>}
           {detail.canRevert ? <div className="operations-revert-area">
             {!confirmRevert ? <><p><ShieldCheck size={15} />回退前会再次检查记录状态，避免覆盖之后的修改。</p><button type="button" className="secondary-button" disabled={reverting} onClick={() => setConfirmRevert(true)}><RotateCcw size={15} />回退此操作</button></> : <div className="operations-revert-confirm" role="group" aria-labelledby={`${id}-confirm-heading`}><h3 id={`${id}-confirm-heading`}>确认回退此操作？</h3><p>{revertDescription(detail.operation)}回退后会生成一条新的操作记录。</p><div className="operations-confirm-actions"><button ref={confirmationRef} type="button" className="secondary-button" disabled={reverting} onClick={() => setConfirmRevert(false)}>取消回退</button><button type="button" className="danger-button" disabled={reverting} onClick={() => void revertOperation()}>{reverting ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}{reverting ? "正在回退…" : "确认回退"}</button></div></div>}

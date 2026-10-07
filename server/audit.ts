@@ -2,18 +2,21 @@ import type { Database, Statement } from './db.js'
 import { ApiError } from './errors.js'
 
 type Actor = { id: string; username: string }
-export interface AuditTargets { bookmarkIds?: string[]; tagIds?: string[]; submissionIds?: string[] }
+export interface AuditTargets { bookmarkIds?: string[]; tagIds?: string[]; submissionIds?: string[]; categoryIds?: string[] }
 export interface OperationSummary {
   id: string; action: string; actorId: string | null; actorName: string; createdAt: string
   bookmarkCount: number; bookmarkTitles: string[]; revertedAt: string | null; revertedBy: string | null; revertOf: string | null
+  categoryNames: string[]
 }
-type SummaryRow = Omit<OperationSummary, 'bookmarkTitles'> & { bookmarkTitles: string }
+type SummaryRow = Omit<OperationSummary, 'bookmarkTitles' | 'categoryNames'> & { bookmarkTitles: string; categoryNames: string }
 const summaryFields = `op.id,op.action,op.actor_id AS actorId,op.actor_name AS actorName,op.created_at AS createdAt,
   op.reverted_at AS revertedAt,op.reverted_by AS revertedBy,op.revert_of AS revertOf,
   (SELECT COUNT(*) FROM operation_changes WHERE operation_id = op.id) AS bookmarkCount,
   (SELECT json_group_array(title) FROM (SELECT COALESCE(json_extract(after_json,'$.title'),json_extract(before_json,'$.title')) AS title
-    FROM operation_changes WHERE operation_id = op.id ORDER BY bookmark_id)) AS bookmarkTitles`
-const asSummary = (row: SummaryRow): OperationSummary => ({ ...row, bookmarkTitles: JSON.parse(row.bookmarkTitles) })
+    FROM operation_changes WHERE operation_id = op.id ORDER BY bookmark_id)) AS bookmarkTitles,
+  (SELECT json_group_array(name) FROM (SELECT COALESCE(json_extract(after_json,'$.name'),json_extract(before_json,'$.name')) AS name
+    FROM operation_category_changes WHERE operation_id = op.id ORDER BY category_id)) AS categoryNames`
+const asSummary = (row: SummaryRow): OperationSummary => ({ ...row, bookmarkTitles: JSON.parse(row.bookmarkTitles), categoryNames: JSON.parse(row.categoryNames) })
 
 // These expressions run inside the mutation transaction, never against a stale JS pre-read.
 function bookmarkSnapshot(id: string) {
@@ -25,7 +28,8 @@ function bookmarkSnapshot(id: string) {
     'categories',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',c.id,'name',c.name) AS item FROM bookmark_categories bc JOIN categories c ON c.id = bc.category_id WHERE bc.bookmark_id = b.id ORDER BY bc.position,c.id))),
     'tags',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',t.id,'name',t.name) AS item FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE bt.bookmark_id = b.id ORDER BY t.normalized_name,t.id))),
     'editedBy',json((SELECT json_group_array(username) FROM (SELECT username FROM bookmark_editors WHERE bookmark_id = b.id ORDER BY created_at,username))),
-    '_editorDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('username',username,'createdAt',created_at) AS item FROM bookmark_editors WHERE bookmark_id = b.id ORDER BY created_at,username)))
+    '_editorDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('username',username,'createdAt',created_at) AS item FROM bookmark_editors WHERE bookmark_id = b.id ORDER BY created_at,username))),
+    '_categoryDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order) AS item FROM bookmark_categories bc JOIN categories c ON c.id = bc.category_id WHERE bc.bookmark_id = b.id ORDER BY bc.position,c.id)))
   ) FROM bookmarks b WHERE b.id = ${id})`
 }
 
@@ -41,24 +45,38 @@ function submissionSnapshot(id: string) {
   return `(SELECT json_object('id',s.id,'title',s.title,'url',s.url,'description',s.description,'categoryId',s.category_id,
     'status',s.status,'createdAt',s.created_at,'createdBy',s.created_by,
     'categoryIds',json((SELECT json_group_array(category_id) FROM (SELECT category_id FROM submission_categories WHERE submission_id = s.id ORDER BY position,category_id))),
-    'tags',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',t.id,'name',t.name) AS item FROM submission_tags st JOIN tags t ON t.id = st.tag_id WHERE st.submission_id = s.id ORDER BY t.normalized_name,t.id)))
+    'tags',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',t.id,'name',t.name) AS item FROM submission_tags st JOIN tags t ON t.id = st.tag_id WHERE st.submission_id = s.id ORDER BY t.normalized_name,t.id))),
+    '_categoryDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order) AS item FROM submission_categories sc JOIN categories c ON c.id = sc.category_id WHERE sc.submission_id = s.id ORDER BY sc.position,c.id)))
   ) FROM submissions s WHERE s.id = ${id})`
 }
+
+function categorySnapshot(id: string) {
+  return `(SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order,
+    'bookmarkIds',json((SELECT json_group_array(bookmark_id) FROM (SELECT bookmark_id FROM bookmark_categories WHERE category_id = c.id ORDER BY bookmark_id))),
+    'submissionIds',json((SELECT json_group_array(submission_id) FROM (SELECT submission_id FROM submission_categories WHERE category_id = c.id ORDER BY submission_id)))
+  ) FROM categories c WHERE c.id = ${id})`
+}
+
+const categoryMetadata = (id: string) => `(SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order) FROM categories c WHERE c.id = ${id})`
 
 const content = (snapshot: string) => `json_remove(${snapshot},'$.clicks')`
 
 function captureBefore(id: string, targets: AuditTargets): Statement[] {
   return [
-    { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT bookmark_id FROM bookmark_tags WHERE tag_id IN (SELECT value FROM json_each(?)))
+    { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT bookmark_id FROM bookmark_tags WHERE tag_id IN (SELECT value FROM json_each(?))
+      UNION SELECT bookmark_id FROM bookmark_categories WHERE category_id IN (SELECT value FROM json_each(?)))
       INSERT INTO operation_changes (operation_id,bookmark_id,before_json,before_revision)
       SELECT ?,selected.id,${bookmarkSnapshot('selected.id')},COALESCE((SELECT revision FROM bookmark_revisions WHERE bookmark_id = selected.id),0) FROM selected`,
-      params: [JSON.stringify(targets.bookmarkIds ?? []), JSON.stringify(targets.tagIds ?? []), id] },
+      params: [JSON.stringify(targets.bookmarkIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(targets.categoryIds ?? []), id] },
     { sql: `INSERT INTO operation_tag_changes (operation_id,tag_id,before_json)
       SELECT ?,selected.value,${tagSnapshot('selected.value')} FROM json_each(?) selected`, params: [id, JSON.stringify(targets.tagIds ?? [])] },
-    { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT submission_id FROM submission_tags WHERE tag_id IN (SELECT value FROM json_each(?)))
+    { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT submission_id FROM submission_tags WHERE tag_id IN (SELECT value FROM json_each(?))
+      UNION SELECT submission_id FROM submission_categories WHERE category_id IN (SELECT value FROM json_each(?)))
       INSERT INTO operation_submission_changes (operation_id,submission_id,before_json)
       SELECT ?,selected.id,${submissionSnapshot('selected.id')} FROM selected`,
-      params: [JSON.stringify(targets.submissionIds ?? []), JSON.stringify(targets.tagIds ?? []), id] },
+      params: [JSON.stringify(targets.submissionIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(targets.categoryIds ?? []), id] },
+    { sql: `INSERT INTO operation_category_changes (operation_id,category_id,before_json)
+      SELECT ?,selected.value,${categorySnapshot('selected.value')} FROM json_each(?) selected`, params: [id, JSON.stringify(targets.categoryIds ?? [])] },
   ]
 }
 
@@ -73,8 +91,11 @@ function captureAfter(id: string): Statement[] {
     { sql: 'DELETE FROM operation_tag_changes WHERE operation_id = ? AND before_json IS after_json', params: [id] },
     { sql: `UPDATE operation_submission_changes AS sc SET after_json = ${submissionSnapshot('sc.submission_id')} WHERE operation_id = ?`, params: [id] },
     { sql: 'DELETE FROM operation_submission_changes WHERE operation_id = ? AND before_json IS after_json', params: [id] },
+    { sql: `UPDATE operation_category_changes AS cc SET after_json = ${categorySnapshot('cc.category_id')} WHERE operation_id = ?`, params: [id] },
+    { sql: 'DELETE FROM operation_category_changes WHERE operation_id = ? AND before_json IS after_json', params: [id] },
     { sql: `DELETE FROM operations WHERE id = ? AND NOT EXISTS (SELECT 1 FROM operation_changes WHERE operation_id = operations.id)
       AND NOT EXISTS (SELECT 1 FROM operation_tag_changes WHERE operation_id = operations.id)
+      AND NOT EXISTS (SELECT 1 FROM operation_category_changes WHERE operation_id = operations.id)
       AND NOT EXISTS (SELECT 1 FROM operation_submission_changes WHERE operation_id = operations.id)`, params: [id] },
   ]
 }
@@ -110,15 +131,26 @@ function revertReason(source: string) {
       AND ${tagSnapshot('tc.tag_id')} IS NOT tc.after_json) THEN '标签或标签关联已发生变化，无法安全回退'
     WHEN EXISTS (SELECT 1 FROM operation_submission_changes sc WHERE sc.operation_id = ${source}
       AND ${submissionSnapshot('sc.submission_id')} IS NOT sc.after_json) THEN '关联的分享记录已发生变化，无法安全回退'
+    WHEN EXISTS (SELECT 1 FROM operation_category_changes cc WHERE cc.operation_id = ${source}
+      AND ${categorySnapshot('cc.category_id')} IS NOT cc.after_json) THEN '文件夹或文件夹关联已发生变化，无法安全回退'
     WHEN EXISTS (SELECT 1 FROM operation_changes oc JOIN bookmarks b ON b.url = json_extract(oc.before_json,'$.url')
       WHERE oc.operation_id = ${source} AND b.id NOT IN (SELECT bookmark_id FROM operation_changes WHERE operation_id = ${source})) THEN '原网址已被其他书签占用，无法恢复'
     WHEN EXISTS (SELECT 1 FROM operation_changes oc,json_each(oc.before_json,'$.categories') category
-      WHERE oc.operation_id = ${source} AND NOT EXISTS (SELECT 1 FROM categories WHERE id = json_extract(category.value,'$.id') AND name = json_extract(category.value,'$.name'))) THEN '原文件夹已被删除或更改，无法安全回退'
+      WHERE oc.operation_id = ${source} AND NOT EXISTS (SELECT 1 FROM categories WHERE id = json_extract(category.value,'$.id') AND name = json_extract(category.value,'$.name'))
+      AND NOT EXISTS (SELECT 1 FROM operation_category_changes cc WHERE cc.operation_id = ${source} AND cc.category_id = json_extract(category.value,'$.id') AND json_extract(cc.before_json,'$.name') = json_extract(category.value,'$.name'))) THEN '原文件夹已被删除或更改，无法安全回退'
+    WHEN EXISTS (SELECT 1 FROM (
+      SELECT category.value FROM operation_changes oc,json_each(oc.before_json,'$._categoryDetails') category WHERE oc.operation_id = ${source}
+      UNION ALL SELECT category.value FROM operation_submission_changes sc,json_each(sc.before_json,'$._categoryDetails') category WHERE sc.operation_id = ${source}
+    ) dependency WHERE ${categoryMetadata("json_extract(dependency.value,'$.id')")} IS NOT json(dependency.value)
+      AND NOT EXISTS (SELECT 1 FROM operation_category_changes cc WHERE cc.operation_id = ${source} AND cc.category_id = json_extract(dependency.value,'$.id')
+        AND json_remove(cc.before_json,'$.bookmarkIds','$.submissionIds') IS json(dependency.value))) THEN '原文件夹属性已发生变化，请先回退相关文件夹操作'
     WHEN EXISTS (SELECT 1 FROM operation_changes oc,json_each(oc.before_json,'$.tags') tag
       WHERE oc.operation_id = ${source} AND NOT EXISTS (SELECT 1 FROM tags WHERE id = json_extract(tag.value,'$.id') AND name = json_extract(tag.value,'$.name'))
       AND NOT EXISTS (SELECT 1 FROM operation_tag_changes tc WHERE tc.operation_id = ${source} AND tc.tag_id = json_extract(tag.value,'$.id') AND json_extract(tc.before_json,'$.name') = json_extract(tag.value,'$.name'))) THEN '原标签已被删除或更改，无法安全回退'
     WHEN EXISTS (SELECT 1 FROM operation_tag_changes tc JOIN tags t ON t.normalized_name = json_extract(tc.before_json,'$.normalizedName') AND t.id != tc.tag_id
       WHERE tc.operation_id = ${source}) THEN '原标签名称已被其他标签占用，无法恢复'
+    WHEN EXISTS (SELECT 1 FROM operation_category_changes cc JOIN categories c ON c.name = json_extract(cc.before_json,'$.name') COLLATE NOCASE AND c.id != cc.category_id
+      WHERE cc.operation_id = ${source}) THEN '原文件夹名称已被其他文件夹占用，无法恢复'
     ELSE NULL END`
 }
 
@@ -132,8 +164,10 @@ export async function listOperations(db: Database, query: { q?: string; action?:
   if (q.length > 200 || actor.length > 100 || action.length > 40) throw new ApiError('搜索条件过长')
   const where = `(? = '' OR op.action = ?) AND (? = '' OR instr(lower(op.actor_name),lower(?)) > 0)
     AND (? = '' OR instr(lower(op.actor_name),lower(?)) > 0 OR EXISTS (SELECT 1 FROM operation_changes oc WHERE oc.operation_id = op.id
-      AND instr(lower(COALESCE(json_extract(oc.before_json,'$.title'),'') || ' ' || COALESCE(json_extract(oc.after_json,'$.title'),'') || ' ' || COALESCE(json_extract(oc.before_json,'$.url'),'') || ' ' || COALESCE(json_extract(oc.after_json,'$.url'),'')),lower(?)) > 0))`
-  const params = [action, action, actor, actor, q, q, q]
+      AND instr(lower(COALESCE(json_extract(oc.before_json,'$.title'),'') || ' ' || COALESCE(json_extract(oc.after_json,'$.title'),'') || ' ' || COALESCE(json_extract(oc.before_json,'$.url'),'') || ' ' || COALESCE(json_extract(oc.after_json,'$.url'),'')),lower(?)) > 0)
+      OR EXISTS (SELECT 1 FROM operation_category_changes cc WHERE cc.operation_id = op.id
+        AND instr(lower(COALESCE(json_extract(cc.before_json,'$.name'),'') || ' ' || COALESCE(json_extract(cc.after_json,'$.name'),'')),lower(?)) > 0))`
+  const params = [action, action, actor, actor, q, q, q, q]
   const [rows, total] = await Promise.all([
     db.all<SummaryRow>(`SELECT ${summaryFields} FROM operations op WHERE ${where} ORDER BY op.created_at DESC,op.rowid DESC LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]),
     db.get<{ total: number }>(`SELECT COUNT(*) AS total FROM operations op WHERE ${where}`, params),
@@ -143,26 +177,33 @@ export async function listOperations(db: Database, query: { q?: string; action?:
 
 function publicSnapshot(value: string | null) {
   if (!value) return null
-  const { _sourceSubmissionId: _source, _editorDetails: _editors, ...bookmark } = JSON.parse(value)
+  const { _sourceSubmissionId: _source, _editorDetails: _editors, _categoryDetails: _categories, ...bookmark } = JSON.parse(value)
   return bookmark
 }
 
 export async function operationDetail(db: Database, id: string) {
   const row = await db.get<SummaryRow & { revertReason: string | null }>(`SELECT ${summaryFields},${revertReason('op.id')} AS revertReason FROM operations op WHERE op.id = ?`, [id])
   if (!row) throw new ApiError('这条操作记录不存在', 404)
-  const [changes, tags] = await Promise.all([
+  const [changes, tags, categories] = await Promise.all([
     db.all<{ bookmarkId: string; before_json: string | null; after_json: string | null }>('SELECT bookmark_id AS bookmarkId,before_json,after_json FROM operation_changes WHERE operation_id = ? ORDER BY bookmark_id', [id]),
     db.all<{ before_json: string | null; after_json: string | null }>('SELECT before_json,after_json FROM operation_tag_changes WHERE operation_id = ? ORDER BY tag_id', [id]),
+    db.all<{ before_json: string | null; after_json: string | null }>('SELECT before_json,after_json FROM operation_category_changes WHERE operation_id = ? ORDER BY category_id', [id]),
   ])
   const { revertReason: reason, ...summary } = row
   const tag = (json: string | null) => { if (!json) return null; const value = JSON.parse(json); return { id: value.id, name: value.name } }
+  const category = (json: string | null) => { if (!json) return null; const { bookmarkIds: _bookmarks, submissionIds: _submissions, ...value } = JSON.parse(json); return value }
   return { operation: asSummary(summary), changes: changes.map(change => ({ bookmarkId: change.bookmarkId, before: publicSnapshot(change.before_json), after: publicSnapshot(change.after_json) })),
-    canRevert: reason === null, revertReason: reason, tagChanges: tags.map(change => ({ before: tag(change.before_json), after: tag(change.after_json) })) }
+    canRevert: reason === null, revertReason: reason, tagChanges: tags.map(change => ({ before: tag(change.before_json), after: tag(change.after_json) })),
+    categoryChanges: categories.map(change => ({ before: category(change.before_json), after: category(change.after_json) })) }
 }
 
 function restoreStatements(source: string, revertId: string): Statement[] {
   const sourceParams = [source]
   return [
+    { sql: `INSERT INTO categories (id,name,icon,color,sort_order)
+      SELECT category_id,json_extract(before_json,'$.name'),json_extract(before_json,'$.icon'),json_extract(before_json,'$.color'),json_extract(before_json,'$.sortOrder')
+      FROM operation_category_changes WHERE operation_id = ? AND before_json IS NOT NULL
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name,icon = excluded.icon,color = excluded.color,sort_order = excluded.sort_order`, params: sourceParams },
     { sql: 'DELETE FROM bookmarks WHERE id IN (SELECT bookmark_id FROM operation_changes WHERE operation_id = ?)', params: sourceParams },
     { sql: 'DELETE FROM submission_tags WHERE submission_id IN (SELECT submission_id FROM operation_submission_changes WHERE operation_id = ?)', params: sourceParams },
     { sql: 'DELETE FROM tags WHERE id IN (SELECT tag_id FROM operation_tag_changes WHERE operation_id = ?)', params: sourceParams },
@@ -185,10 +226,15 @@ function restoreStatements(source: string, revertId: string): Statement[] {
       FROM operation_changes oc,json_each(oc.before_json,'$.tags') tag WHERE oc.operation_id = ?`, params: sourceParams },
     { sql: `INSERT INTO bookmark_editors (bookmark_id,username,created_at) SELECT oc.bookmark_id,json_extract(editor.value,'$.username'),json_extract(editor.value,'$.createdAt')
       FROM operation_changes oc,json_each(oc.before_json,'$._editorDetails') editor WHERE oc.operation_id = ?`, params: sourceParams },
-    { sql: `UPDATE submissions SET status = (SELECT json_extract(before_json,'$.status') FROM operation_submission_changes WHERE operation_id = ? AND submission_id = submissions.id)
-      WHERE id IN (SELECT submission_id FROM operation_submission_changes WHERE operation_id = ?)`, params: [source, source] },
+    { sql: `UPDATE submissions SET status = (SELECT json_extract(before_json,'$.status') FROM operation_submission_changes WHERE operation_id = ? AND submission_id = submissions.id),
+      category_id = (SELECT json_extract(before_json,'$.categoryId') FROM operation_submission_changes WHERE operation_id = ? AND submission_id = submissions.id)
+      WHERE id IN (SELECT submission_id FROM operation_submission_changes WHERE operation_id = ?)`, params: [source, source, source] },
+    { sql: 'DELETE FROM submission_categories WHERE submission_id IN (SELECT submission_id FROM operation_submission_changes WHERE operation_id = ?)', params: sourceParams },
+    { sql: `INSERT INTO submission_categories (submission_id,category_id,position)
+      SELECT sc.submission_id,category.value,CAST(category.key AS INTEGER) FROM operation_submission_changes sc,json_each(sc.before_json,'$.categoryIds') category WHERE sc.operation_id = ?`, params: sourceParams },
     { sql: `INSERT INTO submission_tags (submission_id,tag_id) SELECT sc.submission_id,json_extract(tag.value,'$.id')
       FROM operation_submission_changes sc,json_each(sc.before_json,'$.tags') tag WHERE sc.operation_id = ?`, params: sourceParams },
+    { sql: 'DELETE FROM categories WHERE id IN (SELECT category_id FROM operation_category_changes WHERE operation_id = ? AND before_json IS NULL)', params: sourceParams },
   ]
 }
 
@@ -196,16 +242,17 @@ export async function revertOperation(db: Database, source: string, actor: Actor
   const detail = await operationDetail(db, source)
   if (!detail.canRevert) throw new ApiError(detail.revertReason!, 409)
   const id = crypto.randomUUID()
-  const [bookmarks, tags, submissions] = await Promise.all([
+  const [bookmarks, tags, submissions, categories] = await Promise.all([
     db.all<{ id: string }>('SELECT bookmark_id AS id FROM operation_changes WHERE operation_id = ?', [source]),
     db.all<{ id: string }>('SELECT tag_id AS id FROM operation_tag_changes WHERE operation_id = ?', [source]),
     db.all<{ id: string }>('SELECT submission_id AS id FROM operation_submission_changes WHERE operation_id = ?', [source]),
+    db.all<{ id: string }>('SELECT category_id AS id FROM operation_category_changes WHERE operation_id = ?', [source]),
   ])
   try {
     await db.batch([
       { sql: `INSERT INTO operation_guards (id,valid) SELECT ?,CASE WHEN ${revertReason('op.id')} IS NULL THEN 1 ELSE 0 END FROM operations op WHERE op.id = ?`, params: [id, source] },
       { sql: "INSERT INTO operations (id,action,actor_id,actor_name,revert_of) VALUES (?,'revert',?,?,?)", params: [id, actor.id, actor.username, source] },
-      ...captureBefore(id, { bookmarkIds: bookmarks.map(row => row.id), tagIds: tags.map(row => row.id), submissionIds: submissions.map(row => row.id) }),
+      ...captureBefore(id, { bookmarkIds: bookmarks.map(row => row.id), tagIds: tags.map(row => row.id), submissionIds: submissions.map(row => row.id), categoryIds: categories.map(row => row.id) }),
       ...restoreStatements(source, id),
       ...captureAfter(id),
       { sql: 'UPDATE operations SET reverted_at = (SELECT created_at FROM operations WHERE id = ?), reverted_by = ? WHERE id = ?', params: [id, actor.username, source] },

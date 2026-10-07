@@ -39,6 +39,14 @@ button svg, a svg { flex-shrink: 0; }
 .nav-icon svg, .nav-item > svg { width: 16px; height: 16px; stroke-width: 1.7; }
 .nav-count { margin-left: auto; font-size: 10px; min-width: 19px; color: #8d9886; text-align: center; }
 .nav-item.active .nav-count { background: #cfdec6; color: #5c784e; border-radius: 5px; padding: 2px 4px; }
+.category-nav-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.category-nav-row > .nav-item { flex: 1; min-width: 0; width: auto; }
+.category-nav-row:has(.category-nav-actions) > .nav-item { gap: 8px; padding-inline: 8px; }
+.folder-nav-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-nav-actions { display: flex; flex: 0 0 auto; align-items: center; }
+.category-nav-actions .icon-button { width: 24px; height: 28px; padding: 5px; color: #9da993; }
+.category-nav-actions .icon-button:hover, .category-nav-actions .icon-button:focus-visible { color: #577d43; background: #e9f0e2; }
+.category-nav-actions .delete-icon:hover { color: #aa6e58; background: #f6ece5; }
 .sidebar-share { background: linear-gradient(135deg, #eef2e8, #e9eee1); margin: auto 2px 22px; border: 1px solid #e0e7d7; border-radius: 12px; padding: 17px 14px 14px; position: relative; }
 .sidebar-share > svg { color: #7f9873; margin-bottom: 5px; }
 .sidebar-share h3 { font-size: 12px; font-weight: 600; margin: 6px 0; }

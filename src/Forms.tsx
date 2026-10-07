@@ -6,11 +6,13 @@ import {
   LoaderCircle,
   LockKeyhole,
   Plus,
+  Save,
   Send,
 } from "lucide-react";
 import { api, messageOf } from "./api";
 import Modal from "./Modal";
 import FolderIconPicker from "./FolderIconPicker";
+import { getFolderIcon } from "./folderIcons";
 import TagEditor, { collectTagNames } from "./TagEditor";
 import type { Bookmark, BookmarkInput, Category, Tag, User } from "./types";
 import "./forms.css";
@@ -300,24 +302,30 @@ export function BookmarkModal({
 }
 
 export function CategoryModal({
+  category,
   onClose,
   onSaved,
 }: {
+  category?: Category;
   onClose: () => void;
   onSaved: (category: Category) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [icon, setIcon] = useState("Folder");
-  const [color, setColor] = useState("#54775E");
+  const [icon, setIcon] = useState(() => getFolderIcon(category?.icon).id);
+  const colorId = useId();
+  const initialColor = category?.color || "#54775E";
+  const [color, setColor] = useState(initialColor);
+  const presetColors = ["#54775E", "#5689BD", "#9673B8", "#C18B54", "#BC7C91"];
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     const fields = new FormData(event.currentTarget);
     setBusy(true);
     setError("");
     try {
-      const result = await api<{ category: Category }>("/categories", {
-        method: "POST",
+      const result = await api<{ category: Category }>(category ? `/categories/${encodeURIComponent(category.id)}` : "/categories", {
+        method: category ? "PATCH" : "POST",
         body: JSON.stringify({
           name: String(fields.get("name")).trim(),
           icon,
@@ -333,8 +341,8 @@ export function CategoryModal({
   }
   return (
     <Modal
-      title="新建文件夹"
-      subtitle="用一个清晰的名字，整理同一类灵感。"
+      title={category ? "编辑文件夹" : "新建文件夹"}
+      subtitle={category ? "调整名称、图标和颜色，让收藏更容易辨认。" : "用一个清晰的名字，整理同一类灵感。"}
       wide
       onClose={() => !busy && onClose()}
     >
@@ -347,19 +355,22 @@ export function CategoryModal({
               name="name"
               required
               maxLength={24}
+              defaultValue={category?.name ?? ""}
+              disabled={busy}
               placeholder="例如：效率工具"
             />
           </label>
-          <label className="form-field">
-            文件夹颜色
-            <select name="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={busy}>
+          <div className="form-field">
+            <label htmlFor={colorId}>文件夹颜色</label>
+            <select id={colorId} name="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={busy}>
+              {!presetColors.includes(initialColor) && <option value={initialColor}>当前颜色（{initialColor}）</option>}
               <option value="#54775E">森林绿</option>
               <option value="#5689BD">晴空蓝</option>
               <option value="#9673B8">薰衣草紫</option>
               <option value="#C18B54">暖杏橙</option>
               <option value="#BC7C91">樱花粉</option>
             </select>
-          </label>
+          </div>
           <FolderIconPicker value={icon} color={color} onChange={setIcon} disabled={busy} />
           {error && (
             <p className="form-error" role="alert">
@@ -379,10 +390,12 @@ export function CategoryModal({
           <button className="primary-button" disabled={busy}>
             {busy ? (
               <LoaderCircle className="spin" size={16} />
+            ) : category ? (
+              <Save size={16} />
             ) : (
               <FolderPlus size={16} />
             )}
-            创建文件夹
+            {category ? "保存修改" : "创建文件夹"}
           </button>
         </div>
       </form>

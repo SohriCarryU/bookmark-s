@@ -276,6 +276,22 @@ export function createApp(db: Database, config: AppConfig) {
     return { title, url, description, categoryId: categoryIds[0], categoryIds }
   }
 
+  async function categoryDeletionPreview(id: string) {
+    const [category, counts, targetCategories] = await Promise.all([
+      db.get<Category>(`SELECT ${categoryFields} FROM categories WHERE id = ?`, [id]),
+      db.get<{ bookmarkCount: number; exclusiveBookmarkCount: number; submissionCount: number; exclusiveSubmissionCount: number }>(`SELECT
+        (SELECT COUNT(*) FROM bookmark_categories WHERE category_id = ?) AS bookmarkCount,
+        (SELECT COUNT(*) FROM bookmark_categories source WHERE source.category_id = ? AND NOT EXISTS
+          (SELECT 1 FROM bookmark_categories other WHERE other.bookmark_id = source.bookmark_id AND other.category_id != source.category_id)) AS exclusiveBookmarkCount,
+        (SELECT COUNT(*) FROM submission_categories WHERE category_id = ?) AS submissionCount,
+        (SELECT COUNT(*) FROM submission_categories source WHERE source.category_id = ? AND NOT EXISTS
+          (SELECT 1 FROM submission_categories other WHERE other.submission_id = source.submission_id AND other.category_id != source.category_id)) AS exclusiveSubmissionCount`, [id, id, id, id]),
+      db.all<Category>(`SELECT ${categoryFields} FROM categories WHERE id != ? ORDER BY sort_order,name`, [id]),
+    ])
+    if (!category) throw new ApiError('这个文件夹不存在', 404)
+    return { category, ...counts!, targetCategories }
+  }
+
   function categoryStatements(table: 'bookmark' | 'submission', id: string, categoryIds: string[]): Statement[] {
     return [
       { sql: `DELETE FROM ${table}_categories WHERE ${table}_id = ? AND category_id NOT IN (SELECT value FROM json_each(?))`, params: [id, JSON.stringify(categoryIds)] },
@@ -685,6 +701,78 @@ export function createApp(db: Database, config: AppConfig) {
     const category: Category = { id: crypto.randomUUID(), name, icon, color, sortOrder: sort?.sortOrder ?? 0 }
     await db.run('INSERT INTO categories (id,name,icon,color,sort_order) VALUES (?,?,?,?,?)', [category.id, name, icon, color, category.sortOrder])
     return c.json({ category }, 201)
+  })
+
+  app.patch('/api/categories/:id', requireAdmin, async c => {
+    const id = c.req.param('id')!
+    if (!await db.get('SELECT id FROM categories WHERE id = ?', [id])) throw new ApiError('这个文件夹不存在', 404)
+    const body = await readBody(c)
+    const keys = Object.keys(body)
+    if (!keys.length || keys.some(key => !['name', 'icon', 'color'].includes(key))) throw new ApiError('没有可更新的文件夹字段')
+    const values: unknown[] = []
+    const fields: string[] = []
+    if ('name' in body) {
+      const name = stringField(body.name, '分类名称', 24)
+      if (await db.get('SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND id != ?', [name, id])) throw new ApiError('这个分类已经存在', 409)
+      fields.push('name = ?'); values.push(name)
+    }
+    if ('icon' in body) {
+      const icon = stringField(body.icon, '分类图标', 40)
+      if (!/^[a-zA-Z][a-zA-Z0-9]*$/.test(icon)) throw new ApiError('分类图标格式不正确')
+      fields.push('icon = ?'); values.push(icon)
+    }
+    if ('color' in body) {
+      const color = stringField(body.color, '分类颜色', 7)
+      if (!/^#[a-fA-F0-9]{6}$/.test(color)) throw new ApiError('分类颜色需要是六位十六进制颜色值')
+      fields.push('color = ?'); values.push(color)
+    }
+    await auditedMutation(db, 'category_edit', c.get('user')!, { categoryIds: [id] }, [{
+      sql: `UPDATE categories SET ${fields.join(', ')} WHERE id = ?`, params: [...values, id],
+    }])
+    const category = await db.get<Category>(`SELECT ${categoryFields} FROM categories WHERE id = ?`, [id])
+    if (!category) throw new ApiError('这个文件夹不存在', 404)
+    return c.json({ category })
+  })
+
+  app.get('/api/categories/:id/deletion-preview', requireAdmin, async c => c.json(await categoryDeletionPreview(c.req.param('id')!)))
+
+  app.delete('/api/categories/:id', requireAdmin, async c => {
+    const id = c.req.param('id')!
+    const body = c.req.raw.body ? await readBody(c) : {}
+    if (Object.keys(body).some(key => key !== 'targetCategoryId')) throw new ApiError('删除文件夹的参数不正确')
+    const target = 'targetCategoryId' in body ? stringField(body.targetCategoryId, '目标文件夹', 100) : null
+    const preview = await categoryDeletionPreview(id)
+    if (target && !preview.targetCategories.some(category => category.id === target)) throw new ApiError('请选择其他有效的目标文件夹')
+    if (!target && (preview.exclusiveBookmarkCount || preview.exclusiveSubmissionCount)) throw new ApiError('请选择目标文件夹，保留仅属于此文件夹的书签和分享')
+    const guard = crypto.randomUUID()
+    const statements: Statement[] = [{
+      sql: `INSERT INTO operation_guards (id,valid) SELECT ?,CASE WHEN EXISTS (SELECT 1 FROM categories WHERE id = ?)
+        AND ((? IS NOT NULL AND ? != ? AND EXISTS (SELECT 1 FROM categories WHERE id = ?))
+          OR (? IS NULL AND NOT EXISTS (SELECT 1 FROM bookmark_categories source WHERE source.category_id = ? AND NOT EXISTS
+            (SELECT 1 FROM bookmark_categories other WHERE other.bookmark_id = source.bookmark_id AND other.category_id != source.category_id))
+          AND NOT EXISTS (SELECT 1 FROM submission_categories source WHERE source.category_id = ? AND NOT EXISTS
+            (SELECT 1 FROM submission_categories other WHERE other.submission_id = source.submission_id AND other.category_id != source.category_id)))) THEN 1 ELSE 0 END`,
+      params: [guard, id, target, target, id, target, target, id, id],
+    }]
+    for (const table of ['bookmark', 'submission'] as const) {
+      statements.push(
+        { sql: `INSERT INTO ${table}_categories (${table}_id,category_id,position${table === 'bookmark' ? ',pinned' : ''})
+          SELECT source.${table}_id,?,source.position${table === 'bookmark' ? ',source.pinned' : ''} FROM ${table}_categories source
+          WHERE source.category_id = ? AND NOT EXISTS (SELECT 1 FROM ${table}_categories other WHERE other.${table}_id = source.${table}_id AND other.category_id != source.category_id)`, params: [target, id] },
+        { sql: `DELETE FROM ${table}_categories WHERE category_id = ?`, params: [id] },
+        { sql: `UPDATE ${table}s SET category_id = (SELECT category_id FROM ${table}_categories WHERE ${table}_id = ${table}s.id ORDER BY position,category_id LIMIT 1) WHERE category_id = ?`, params: [id] },
+      )
+    }
+    statements.push({ sql: 'DELETE FROM categories WHERE id = ?', params: [id] }, { sql: 'DELETE FROM operation_guards WHERE id = ?', params: [guard] })
+    try {
+      await auditedMutation(db, 'category_delete', c.get('user')!, { categoryIds: [id] }, statements)
+    } catch (error) {
+      if (error instanceof Error && /AUDIT_REVERT_CONFLICT|FOREIGN KEY constraint|NOT NULL constraint/.test(error.message)) {
+        throw new ApiError('文件夹内容或目标已发生变化，请刷新删除预览后重试', 409)
+      }
+      throw error
+    }
+    return c.json({ ok: true })
   })
 
   app.get('/api/submissions', requireAdmin, async c => {

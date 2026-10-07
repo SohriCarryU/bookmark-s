@@ -79,7 +79,7 @@ test('visitors combine folders and tags with AND/OR, remove chips, find untagged
   await expectTitles(page, ['E2E Dual Alpha']);
   await page.getByRole('button', { name: '任一匹配', exact: true }).click();
   await expectTitles(page, ['E2E Dual Alpha', 'E2E Dual Beta', 'E2E Dual Gamma']);
-  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: /开发工具/ }).click();
+  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: /^开发工具/ }).click();
   await expectTitles(page, ['E2E Dual Alpha', 'E2E Dual Beta']);
   await page.getByRole('button', { name: '取消筛选 E2E Red', exact: true }).click();
   await expectTitles(page, ['E2E Dual Alpha']);
@@ -104,7 +104,7 @@ test('folder options hide zero-count tags, scope tag search and preserve removab
   await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Scope');
   await expect(options.getByRole('button', { name: /#E2E Shared\s*2/ })).toBeVisible();
 
-  await folders.getByRole('button', { name: /开发工具/ }).click();
+  await folders.getByRole('button', { name: /^开发工具/ }).click();
   await expect(options.getByRole('button', { name: /#E2E Shared\s*1/ })).toBeVisible();
   await expect(options.getByRole('button', { name: /#E2E Dev Only/ })).toBeVisible();
   await expect(options.getByRole('button', { name: /#E2E Design Only/ })).toHaveCount(0);
@@ -117,7 +117,7 @@ test('folder options hide zero-count tags, scope tag search and preserve removab
   await expect(options).toContainText('当前范围没有匹配的标签');
   await tagSearch.fill('');
   await chooseTag(page, 'E2E Dev Only');
-  await folders.getByRole('button', { name: /设计灵感/ }).click();
+  await folders.getByRole('button', { name: /^设计灵感/ }).click();
   await expectTitles(page, []);
   await expect(options.locator('.tag-filter-pill')).toHaveCount(0);
   await expect(options).toContainText('当前范围暂无可选标签');
@@ -151,7 +151,7 @@ test('untagged-only and empty folders have useful empty states and can recover a
   await bookmarkSearch.fill('E2E Untagged Scope');
   await expect(page.locator('.bookmark-untagged')).toHaveClass(/bookmark-tag/);
   await expect(page.locator('.bookmark-untagged svg')).toHaveCount(1);
-  await folders.getByRole('button', { name: /开发工具/ }).click();
+  await folders.getByRole('button', { name: /^开发工具/ }).click();
   await expect(options.locator('.tag-filter-pill')).toHaveCount(1);
   await expect(options).toContainText('当前范围的书签尚未添加标签');
   await options.getByRole('button', { name: /未打标签\s*1/ }).click();
@@ -334,7 +334,7 @@ test('600 bookmarks use numbered pages and page sizes while filters search the e
   await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Scale');
   await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
   await pagination.getByRole('button', { name: '下一页', exact: true }).click();
-  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: /开发工具/ }).click();
+  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: /^开发工具/ }).click();
   await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
   expect((await admin.patch(`/api/bookmarks/${hidden.id}`, { data: { tags: ['E2E Deep Search'] } })).ok()).toBeTruthy();
   await page.reload();

@@ -5,6 +5,14 @@ export type Category = {
   color: string;
   sortOrder: number;
 };
+export type CategoryDeletionPreview = {
+  category: Category;
+  bookmarkCount: number;
+  exclusiveBookmarkCount: number;
+  submissionCount: number;
+  exclusiveSubmissionCount: number;
+  targetCategories: Category[];
+};
 export type Tag = { id: string; name: string };
 export type TagCount = Tag & { count: number };
 export type Bookmark = {
@@ -81,6 +89,7 @@ export type OperationSummary = {
   createdAt: string;
   bookmarkCount: number;
   bookmarkTitles: string[];
+  categoryNames?: string[];
   revertedAt: string | null;
   revertedBy: string | null;
   revertOf: string | null;
@@ -96,6 +105,7 @@ export type OperationDetail = {
   canRevert: boolean;
   revertReason: string | null;
   tagChanges?: { before: Tag | null; after: Tag | null }[];
+  categoryChanges?: { before: Category | null; after: Category | null }[];
 };
 export type OperationList = {
   operations: OperationSummary[];

@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { api, messageOf } from "./api";
 import { BookmarkModal, CategoryModal, LoginModal } from "./Forms";
+import DeleteCategoryModal from "./DeleteCategoryModal";
 import Modal from "./Modal";
 import TagFilters from "./TagFilters";
 import SettingsPage from "./SettingsPage";
@@ -54,13 +55,14 @@ import OperationsPage from "./OperationsPage";
 import BookmarkAuthors from "./BookmarkAuthors";
 import { CategoryIcon } from "./folderIcons";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
-import type { Bookmark, Bootstrap, Submission } from "./types";
+import type { Bookmark, Bootstrap, Category, Submission } from "./types";
 
 type ModalState =
   | null
   | { kind: "login" }
   | { kind: "share" }
-  | { kind: "category" }
+  | { kind: "category"; category?: Category }
+  | { kind: "delete-category"; category: Category }
   | { kind: "inbox" }
   | { kind: "tags" }
   | { kind: "batch-tags"; mode: "add" | "remove"; bookmarkIds: string[] }
@@ -238,6 +240,7 @@ export default function App() {
     setData(next);
     setLoading(false);
     setLoadError("");
+    setFilter((current) => current === "all" || current === "pinned" || next.categories.some((item) => item.id === current) ? current : "all");
     setSelectedTagIds((current) => {
       const remaining = current.filter((id) => next.tags.some((tag) => tag.id === id));
       return remaining.length === current.length ? current : remaining;
@@ -720,8 +723,8 @@ export default function App() {
             </p>
             <nav className="nav-list category-nav" aria-label="书签文件夹">
               {categories.map((item) => (
+                <div className="category-nav-row" key={item.id}>
                 <button
-                  key={item.id}
                   className={`nav-item${view === "bookmarks" && filter === item.id ? " active" : ""}`}
                   onClick={() => selectFilter(item.id)}
                   aria-current={view === "bookmarks" && filter === item.id ? "page" : undefined}
@@ -729,7 +732,7 @@ export default function App() {
                   <span className="nav-icon" style={{ color: item.color }}>
                     <CategoryIcon name={item.icon} />
                   </span>
-                  <span>{item.name}</span>
+                  <span className="folder-nav-name" title={item.name}>{item.name}</span>
                   <span className="nav-count">
                     {
                       bookmarks.filter(
@@ -738,6 +741,11 @@ export default function App() {
                     }
                   </span>
                 </button>
+                {isAdmin && <div className="category-nav-actions">
+                  <button type="button" className="icon-button" aria-label={`编辑文件夹 ${item.name}`} title="编辑文件夹" onClick={() => setModal({ kind: "category", category: item })}><Pencil size={13} /></button>
+                  <button type="button" className="icon-button delete-icon" aria-label={`删除文件夹 ${item.name}`} title="删除文件夹" onClick={() => setModal({ kind: "delete-category", category: item })}><Trash2 size={13} /></button>
+                </div>}
+                </div>
               ))}
             </nav>
             {isAdmin && (
@@ -1520,19 +1528,43 @@ export default function App() {
       )}
       {modal?.kind === "category" && (
         <CategoryModal
+          key={modal.category?.id ?? "new"}
+          category={modal.category}
           onClose={() => setModal(null)}
           onSaved={(newCategory) => {
             setData((current) =>
               current
                 ? {
                     ...current,
-                    categories: [...current.categories, newCategory],
+                    categories: current.categories.some((item) => item.id === newCategory.id)
+                      ? current.categories.map((item) => item.id === newCategory.id ? newCategory : item)
+                      : [...current.categories, newCategory],
                   }
                 : current,
             );
             selectFilter(newCategory.id);
             setModal(null);
-            setToast({ message: "文件夹已创建，添加一些喜欢的网站吧" });
+            setToast({ message: modal.category ? "文件夹已更新" : "文件夹已创建，添加一些喜欢的网站吧" });
+          }}
+        />
+      )}
+      {modal?.kind === "delete-category" && (
+        <DeleteCategoryModal
+          category={modal.category}
+          onClose={() => setModal(null)}
+          onDeleted={async () => {
+            const removedId = modal.category.id;
+            setModal(null);
+            setMobileOpen(false);
+            setView("bookmarks");
+            setFilter((current) => current === removedId ? "all" : current);
+            setData((current) => current ? { ...current, categories: current.categories.filter((item) => item.id !== removedId) } : current);
+            try {
+              await Promise.all([refreshData(), loadInbox()]);
+              setToast({ message: "文件夹已删除，书签与网站推荐已保留" });
+            } catch (error) {
+              setToast({ message: `文件夹已删除，刷新内容失败：${messageOf(error)}`, error: true });
+            }
           }}
         />
       )}
