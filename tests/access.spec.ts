@@ -1,5 +1,6 @@
 import { expect, request, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { Bootstrap, User } from '../src/types';
+import { fixtureCookies } from './session';
 
 const mockMember: User = { id: 'mock-member', username: 'mock-member', role: 'user', canAddBookmarks: true, canPinBookmarks: false, isOwner: false };
 
@@ -11,7 +12,8 @@ function privateBootstrap(user: User | null): Bootstrap {
     tags: [],
     bookmarks: user ? [{
       id: 'private-bookmark', title: 'Private members bookmark', url: 'https://private.example/member',
-      description: 'Only signed-in members can read this bookmark.', categoryId: 'development',
+      description: 'Only signed-in members can read this bookmark.', categoryId: 'development', categoryIds: ['development'],
+      pinnedCategoryIds: [], editedBy: [],
       tags: [], clicks: 1, pinned: false, createdAt: '2026-10-07T00:00:00Z', createdBy: user.username,
     }] : [],
     stats: { totalBookmarks: user ? 1 : 0, totalCategories: user ? 1 : 0, totalClicks: user ? 1 : 0 },
@@ -108,6 +110,28 @@ test('returning to the window refreshes revoked add permission and closes the op
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
 });
 
+test('many bookmark contributors collapse to a plus with the complete attribution available on hover and focus', async ({ page }) => {
+  const data = privateBootstrap(mockMember);
+  const editors = Array.from({ length: 16 }, (_, index) => `editor-${String(index + 1).padStart(2, '0')}`);
+  data.bookmarks[0].editedBy = editors;
+  await page.route('**/api/bootstrap', route => route.fulfill({ json: data }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.bookmark-card')).toHaveCount(1);
+  const authors = page.locator('.bookmark-authors');
+  const more = authors.locator('.authors-more');
+  await expect(more).toBeVisible();
+  await expect(more).toHaveText('+');
+  expect(await authors.locator('.author-name').count()).toBeLessThan(editors.length + 1);
+  await more.hover();
+  const description = await more.getAttribute('title');
+  for (const username of [mockMember.username, ...editors]) expect(description).toContain(`@${username}`);
+  await more.focus();
+  await expect(more).toBeFocused();
+  await expect(more).toHaveAttribute('aria-label', /还有 \d+ 位署名用户/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
 test.describe('persisted accounts and settings', () => {
   let admin: APIRequestContext;
   let originalBookmarkIds: Set<string>;
@@ -116,10 +140,7 @@ test.describe('persisted accounts and settings', () => {
   const password = 'bookmark-s-member-e2e-password';
 
   test.beforeAll(async ({ baseURL }) => {
-    admin = await request.newContext({ baseURL });
-    expect((await admin.post('/api/auth/login', {
-      data: { username: 'admin', password: 'bookmark-s-e2e-password' },
-    })).ok()).toBeTruthy();
+    admin = await request.newContext({ baseURL, storageState: { cookies: fixtureCookies(baseURL), origins: [] } });
   });
 
   test.beforeEach(async () => {
@@ -213,7 +234,7 @@ test.describe('persisted accounts and settings', () => {
       const editor = member.getByRole('dialog');
       await editor.getByLabel('网站名称').fill(bookmarkInput.title);
       await editor.getByLabel('网站链接').fill(bookmarkInput.url);
-      await editor.getByLabel('所属文件夹').selectOption('development');
+      await editor.getByRole('group', { name: '所属文件夹', exact: true }).getByRole('checkbox', { name: '开发工具', exact: true }).check();
       await editor.getByRole('button', { name: '添加书签', exact: true }).click();
       await expect(editor).toHaveCount(0);
       await member.getByRole('textbox', { name: '搜索书签' }).fill(bookmarkInput.title);

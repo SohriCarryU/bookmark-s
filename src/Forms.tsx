@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import {
   ArrowUpRight,
   Check,
@@ -12,6 +12,7 @@ import { api, messageOf } from "./api";
 import Modal from "./Modal";
 import TagEditor, { collectTagNames } from "./TagEditor";
 import type { Bookmark, BookmarkInput, Category, Tag, User } from "./types";
+import "./forms.css";
 
 export function LoginModal({
   onClose,
@@ -128,8 +129,23 @@ export function BookmarkModal({
     bookmark?.tags?.map((tag) => tag.name) ?? [],
   );
   const [tagDraft, setTagDraft] = useState("");
+  const folderId = useId();
+  const [folderSearch, setFolderSearch] = useState("");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(() => {
+    const initial = bookmark?.categoryIds?.length
+      ? bookmark.categoryIds
+      : [bookmark?.categoryId ?? defaultCategory ?? categories[0]?.id ?? ""];
+    return [...new Set(initial)].filter((id) => categories.some((category) => category.id === id));
+  });
+  const matchingCategories = categories.filter((category) =>
+    category.name.toLocaleLowerCase().includes(folderSearch.trim().toLocaleLowerCase()),
+  );
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedCategoryIds.length) {
+      setError("请至少选择一个文件夹。");
+      return;
+    }
     const fields = new FormData(event.currentTarget);
     let tagNames: string[];
     try {
@@ -142,7 +158,7 @@ export function BookmarkModal({
       title: String(fields.get("title")).trim(),
       url: String(fields.get("url")).trim(),
       description: String(fields.get("description")).trim(),
-      categoryId: String(fields.get("categoryId")),
+      categoryIds: selectedCategoryIds,
       tags: tagNames,
     };
     setBusy(true);
@@ -200,28 +216,29 @@ export function BookmarkModal({
               placeholder="https://example.com"
             />
           </label>
-          <label className="form-field">
-            所属文件夹
-            <select
-              name="categoryId"
-              required
-              defaultValue={
-                bookmark?.categoryId ??
-                defaultCategory ??
-                categories[0]?.id ??
-                ""
-              }
-            >
-              <option value="" disabled>
-                选择一个文件夹
-              </option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
+          <fieldset className="bookmark-folder-field" disabled={busy} aria-describedby={`${folderId}-hint`}>
+            <legend>所属文件夹</legend>
+            <p id={`${folderId}-hint`} className="bookmark-folder-hint">
+              已选 {selectedCategoryIds.length} 个 · 可多选，内容同步更新，置顶可分别设置。
+            </p>
+            {categories.length > 8 && <label className="form-field bookmark-folder-search">
+              <span className="sr-only">搜索文件夹</span>
+              <input type="search" value={folderSearch} onChange={(event) => setFolderSearch(event.target.value)} placeholder="搜索文件夹…" />
+            </label>}
+            <div className="bookmark-folder-options">
+              {matchingCategories.map((category) => (
+                <label key={category.id} className={`bookmark-folder-option${selectedCategoryIds.includes(category.id) ? " selected" : ""}`}>
+                  <input type="checkbox" name="categoryIds" value={category.id} checked={selectedCategoryIds.includes(category.id)} onChange={(event) => {
+                    const checked = event.target.checked;
+                    setSelectedCategoryIds((current) => checked ? [...current, category.id] : current.filter((id) => id !== category.id));
+                  }} />
+                  <span className="bookmark-folder-dot" style={{ backgroundColor: category.color }} aria-hidden="true" />
+                  <span>{category.name}</span>
+                </label>
               ))}
-            </select>
-          </label>
+              {!matchingCategories.length && <p className="bookmark-folder-empty">{categories.length ? "没有匹配的文件夹" : "请先创建一个文件夹"}</p>}
+            </div>
+          </fieldset>
           <TagEditor
             value={selectedTags}
             onChange={setSelectedTags}

@@ -43,6 +43,7 @@ import {
   Sparkles,
   Trash2,
   Users,
+  SlidersHorizontal,
   X,
   Zap,
   type LucideIcon,
@@ -53,6 +54,8 @@ import Modal from "./Modal";
 import TagFilters from "./TagFilters";
 import SettingsPage from "./SettingsPage";
 import UsersPage from "./UsersPage";
+import PersonalizationPage from "./PersonalizationPage";
+import BookmarkAuthors from "./BookmarkAuthors";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
 import type { Bookmark, Bootstrap, Submission } from "./types";
 
@@ -151,7 +154,7 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("");
   const [jumpError, setJumpError] = useState("");
-  const [view, setView] = useState<"bookmarks" | "settings" | "users">("bookmarks");
+  const [view, setView] = useState<"bookmarks" | "settings" | "users" | "personalization">("bookmarks");
   const [batchMode, setBatchMode] = useState(false);
   const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<string[]>([]);
   const [sort, setSort] = useState<"popular" | "recent">("popular");
@@ -295,11 +298,14 @@ export default function App() {
   }, [filter, query, selectedTagIds, tagMatchMode, untagged, sort, pageSize]);
   useEffect(() => {
     if (!isAdmin) {
-      setView("bookmarks");
+      setView((current) => current === "settings" || current === "users" ? "bookmarks" : current);
       setBatchMode(false);
       setSelectedBookmarkIds([]);
     }
   }, [isAdmin]);
+  useEffect(() => {
+    if (!data?.user) setView((current) => current === "personalization" ? "bookmarks" : current);
+  }, [data?.user]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -348,6 +354,9 @@ export default function App() {
     else setSubmissions([]);
   }, [isAdmin, loadInbox]);
   const category = categories.find((item) => item.id === filter);
+  const isPinnedHere = useCallback((bookmark: Bookmark) => category
+    ? (bookmark.pinnedCategoryIds ?? (bookmark.pinned ? [bookmark.categoryId] : [])).includes(category.id)
+    : bookmark.pinned, [category]);
   const pinnedCount = bookmarks.filter((bookmark) => bookmark.pinned).length;
   const pendingCount = submissions.filter(
     (item) => item.status === "pending",
@@ -363,14 +372,13 @@ export default function App() {
       if (
         filter !== "all" &&
         filter !== "pinned" &&
-        bookmark.categoryId !== filter
+        !(bookmark.categoryIds ?? [bookmark.categoryId]).includes(filter)
       )
         return false;
       if (!terms.length) return true;
-      const categoryName =
-        categories.find((item) => item.id === bookmark.categoryId)?.name ?? "";
+      const categoryName = categories.filter((item) => (bookmark.categoryIds ?? [bookmark.categoryId]).includes(item.id)).map((item) => item.name).join(" ");
       const text =
-        `${bookmark.title} ${bookmark.description} ${bookmark.url} ${categoryName} ${bookmark.createdBy ? `@${bookmark.createdBy}` : ""} ${bookmark.tags.map((tag) => tag.name).join(" ")}`.toLocaleLowerCase();
+        `${bookmark.title} ${bookmark.description} ${bookmark.url} ${categoryName} ${bookmark.createdBy ? `@${bookmark.createdBy}` : ""} ${(bookmark.editedBy ?? []).map((name) => `@${name}`).join(" ")} ${bookmark.tags.map((tag) => tag.name).join(" ")}`.toLocaleLowerCase();
       return terms.every((term) => text.includes(term));
     });
   }, [bookmarks, categories, filter, query]);
@@ -386,13 +394,13 @@ export default function App() {
       })
       .sort(
         (a, b) =>
-          Number(b.pinned) - Number(a.pinned) ||
+          Number(isPinnedHere(b)) - Number(isPinnedHere(a)) ||
           (sort === "popular"
             ? b.clicks - a.clicks
             : Date.parse(b.createdAt) - Date.parse(a.createdAt)) ||
           a.title.localeCompare(b.title, "zh-CN"),
       );
-  }, [folderAndSearchMatches, selectedTagIds, tagMatchMode, untagged, sort]);
+  }, [folderAndSearchMatches, selectedTagIds, tagMatchMode, untagged, sort, isPinnedHere]);
   const contextualTags = useMemo(() => {
     const candidates =
       tagMatchMode === "all" && selectedTagIds.length > 0 && !untagged
@@ -550,18 +558,19 @@ export default function App() {
       });
   }
   async function togglePin(bookmark: Bookmark) {
+    const pinned = isPinnedHere(bookmark);
     setWorkingId(bookmark.id);
     try {
       updateBookmark(
         (
           await api<{ bookmark: Bookmark }>(`/bookmarks/${bookmark.id}`, {
             method: "PATCH",
-            body: JSON.stringify({ pinned: !bookmark.pinned }),
+            body: JSON.stringify({ pinned: !pinned, ...(category ? { categoryId: category.id } : {}) }),
           })
         ).bookmark,
       );
       setToast({
-        message: bookmark.pinned ? "已取消置顶" : "已置顶，下次更快找到它",
+        message: `${category?.name ?? "全部书签"}：${pinned ? "已取消置顶" : "已置顶"}`,
       });
     } catch (error) {
       setToast({ message: messageOf(error), error: true });
@@ -617,10 +626,7 @@ export default function App() {
       setWorkingId(null);
     }
   }
-  async function logout() {
-    try {
-      ++bootstrapRequest.current;
-      await api("/auth/logout", { method: "POST" });
+  function clearSession() {
       ++bootstrapRequest.current;
       setData((current) => current ? {
         ...current, user: null,
@@ -631,6 +637,12 @@ export default function App() {
       } : current);
       setView("bookmarks");
       setModal(null);
+  }
+  async function logout() {
+    try {
+      ++bootstrapRequest.current;
+      await api("/auth/logout", { method: "POST" });
+      clearSession();
       await refreshData();
       setToast({ message: "已退出登录" });
     } catch (error) {
@@ -749,7 +761,7 @@ export default function App() {
                   <span className="nav-count">
                     {
                       bookmarks.filter(
-                        (bookmark) => bookmark.categoryId === item.id,
+                        (bookmark) => (bookmark.categoryIds ?? [bookmark.categoryId]).includes(item.id),
                       ).length
                     }
                   </span>
@@ -793,6 +805,16 @@ export default function App() {
                 <span>站点配置</span>
               </button>
             )}
+            {data?.user && (
+              <button
+                className={`nav-item settings-nav${view === "personalization" ? " active" : ""}`}
+                aria-current={view === "personalization" ? "page" : undefined}
+                onClick={() => { setView("personalization"); setMobileOpen(false); window.scrollTo(0, 0); }}
+              >
+                <span className="nav-icon"><SlidersHorizontal size={18} /></span>
+                <span>个性化配置</span>
+              </button>
+            )}
           </div>}
           {canViewContent && <div className="sidebar-bottom">
             <div className="sidebar-share">
@@ -812,7 +834,7 @@ export default function App() {
             </div>
             <div className="sidebar-footer">
               <span className="open-source-dot" />
-              开源 · 自由 · 属于你
+              开源 · 自由 · 共享
               <Heart size={12} />
             </div>
           </div>}
@@ -833,7 +855,7 @@ export default function App() {
               <span>我的收藏馆</span>
               <ChevronRight size={14} />
               <strong>
-                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : !canViewContent ? "收藏馆" : filter === "pinned"
+                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "pinned"
                   ? "置顶收藏"
                   : (category?.name ?? "全部书签")}
               </strong>
@@ -907,6 +929,15 @@ export default function App() {
           ) : isAdmin && view === "users" ? (
             <main className="main-content">
               <UsersPage currentUser={data!.user!} onChanged={refreshData} onNotify={(message, error) => setToast({ message, error })} />
+            </main>
+          ) : data?.user && view === "personalization" ? (
+            <main className="main-content">
+              <PersonalizationPage
+                user={data.user}
+                onChanged={refreshData}
+                onNotify={(message, error) => setToast({ message, error })}
+                onPasswordChanged={async () => { clearSession(); await refreshData(); }}
+              />
             </main>
           ) : data && !canViewContent ? (
             <main className="main-content private-site">
@@ -1084,7 +1115,7 @@ export default function App() {
                     {query.trim()
                       ? `与「${query.trim()}」有关的收藏`
                       : filter === "pinned"
-                        ? "特别喜欢的，放在最容易找到的地方"
+                        ? "在全部书签中单独置顶的收藏"
                         : category
                           ? "同一种热爱，不同的好发现"
                           : "每一个收藏，都是一次值得的发现"}
@@ -1258,12 +1289,11 @@ export default function App() {
               ) : (
                 <div className="bookmark-grid">
                   {displayed.map((bookmark) => {
-                    const itemCategory = categories.find(
-                      (item) => item.id === bookmark.categoryId,
-                    );
+                    const itemCategories = categories.filter((item) => (bookmark.categoryIds ?? [bookmark.categoryId]).includes(item.id));
+                    const pinned = isPinnedHere(bookmark);
                     return (
                       <article
-                        className={`bookmark-card${bookmark.pinned ? " is-pinned" : ""}${selectedBookmarkIds.includes(bookmark.id) ? " is-selected" : ""}`}
+                        className={`bookmark-card${pinned ? " is-pinned" : ""}${selectedBookmarkIds.includes(bookmark.id) ? " is-selected" : ""}`}
                         key={bookmark.id}
                       >
                         <div className="card-top">
@@ -1281,7 +1311,7 @@ export default function App() {
                           )}
                           <SiteIcon bookmark={bookmark} />
                           <div className="card-top-right">
-                            {bookmark.pinned && (
+                            {pinned && (
                               <span className="pin-badge">
                                 <Pin size={11} fill="currentColor" />
                                 置顶
@@ -1290,11 +1320,11 @@ export default function App() {
                             {canPinBookmarks && (
                               <div className="card-menu">
                                 <button
-                                  className={`icon-button${bookmark.pinned ? " pin-active" : ""}`}
+                                  className={`icon-button${pinned ? " pin-active" : ""}`}
                                   title={
-                                    bookmark.pinned ? "取消置顶" : "置顶书签"
+                                    pinned ? "取消置顶" : "置顶书签"
                                   }
-                                  aria-label={`${bookmark.pinned ? "取消置顶" : "置顶"} ${bookmark.title}`}
+                                  aria-label={`${pinned ? "取消置顶" : "置顶"} ${bookmark.title}`}
                                   disabled={!!workingId}
                                   onClick={() => void togglePin(bookmark)}
                                 >
@@ -1365,11 +1395,11 @@ export default function App() {
                             <span className="bookmark-tag bookmark-untagged"><CircleAlert size={10} aria-hidden="true" />未打标签</span>
                           )}
                         </div>
-                        {bookmark.createdBy && (
-                          <p className="bookmark-author" title={`由 ${bookmark.createdBy} 添加`}>@{bookmark.createdBy}</p>
-                        )}
+                        <BookmarkAuthors bookmark={bookmark} />
                         <div className="card-footer">
-                          <button
+                          <div className="bookmark-folders" aria-label={`${bookmark.title} 的文件夹`}>
+                          {itemCategories.map((itemCategory) => <button
+                            key={itemCategory.id}
                             className="category-badge"
                             style={
                               itemCategory
@@ -1379,11 +1409,12 @@ export default function App() {
                                   }
                                 : undefined
                             }
-                            onClick={() => selectFilter(bookmark.categoryId)}
+                            onClick={() => selectFilter(itemCategory.id)}
                           >
                             <span />
-                            {itemCategory?.name ?? "未归档"}
-                          </button>
+                            {itemCategory.name}
+                          </button>)}
+                          </div>
                           <span
                             className="click-count"
                             title={`总点击 ${number.format(bookmark.clicks)} 次`}
@@ -1657,11 +1688,9 @@ export default function App() {
                         </div>
                       )}
                       <div className="submission-footer">
-                        <span className="category-badge">
-                          {categories.find(
-                            (category) => category.id === item.categoryId,
-                          )?.name ?? "未归档"}
-                        </span>
+                        <div className="bookmark-folders">
+                          {categories.filter((category) => (item.categoryIds ?? [item.categoryId]).includes(category.id)).map((category) => <span key={category.id} className="category-badge">{category.name}</span>)}
+                        </div>
                         {item.status === "pending" ? (
                           <div className="submission-actions">
                             <button

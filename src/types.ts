@@ -13,11 +13,14 @@ export type Bookmark = {
   url: string;
   description: string;
   categoryId: string;
+  categoryIds: string[];
+  pinnedCategoryIds: string[];
   tags: Tag[];
   clicks: number;
   pinned: boolean;
   createdAt: string;
   createdBy: string | null;
+  editedBy: string[];
 };
 export type User = {
   id: string;
@@ -38,6 +41,7 @@ export type Submission = {
   url: string;
   description: string;
   categoryId: string;
+  categoryIds: string[];
   tags: Tag[];
   status: "pending" | "approved" | "rejected";
   createdAt: string;
@@ -60,5 +64,9 @@ export type Bootstrap = {
 };
 export type BookmarkInput = Pick<
   Bookmark,
-  "title" | "url" | "description" | "categoryId"
+  "title" | "url" | "description" | "categoryIds"
 > & { tags: string[] };
+export type PersonalPreferences = {
+  blockedTagIds: string[];
+  tags: TagCount[];
+};

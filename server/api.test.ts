@@ -158,7 +158,8 @@ test('Cloudflare migration and local initialization produce the same schema and 
   migration.exec(readFileSync(new URL('../migrations/0002_tags.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0003_accounts.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0004_site_permissions.sql', import.meta.url), 'utf8'))
-  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users']) {
+  migration.exec(readFileSync(new URL('../migrations/0005_collections_preferences.sql', import.meta.url), 'utf8'))
+  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users', 'bookmark_categories', 'submission_categories', 'bookmark_editors', 'user_blocked_tags', 'owner_auth']) {
     assert.deepEqual(await local.all(`PRAGMA table_info(${table})`), migration.prepare(`PRAGMA table_info(${table})`).all())
   }
   for (const sql of [
@@ -166,6 +167,11 @@ test('Cloudflare migration and local initialization produce the same schema and 
     'SELECT * FROM categories ORDER BY id',
     'SELECT id,title,url,description,category_id,clicks,pinned,source_submission_id,created_by FROM bookmarks ORDER BY id',
     'SELECT * FROM users ORDER BY id',
+    'SELECT * FROM bookmark_categories ORDER BY bookmark_id,category_id',
+    'SELECT * FROM submission_categories ORDER BY submission_id,category_id',
+    'SELECT * FROM bookmark_editors ORDER BY bookmark_id,username',
+    'SELECT * FROM user_blocked_tags ORDER BY user_id,tag_id',
+    'SELECT * FROM owner_auth ORDER BY id',
     'SELECT * FROM tags ORDER BY id',
     'SELECT * FROM bookmark_tags ORDER BY bookmark_id,tag_id',
     'SELECT * FROM submission_tags ORDER BY submission_id,tag_id',

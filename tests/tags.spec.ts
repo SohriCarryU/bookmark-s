@@ -1,5 +1,6 @@
 import { expect, request, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import type { Bookmark, Bootstrap } from '../src/types';
+import { fixtureCookies } from './session';
 
 let admin: APIRequestContext;
 let originalBookmarkIds: Set<string>;
@@ -7,11 +8,7 @@ let originalTagIds: Set<string>;
 
 test.beforeAll(async ({ baseURL }) => {
   // The browser remains a visitor unless a test explicitly copies this session.
-  admin = await request.newContext({ baseURL });
-  const response = await admin.post('/api/auth/login', {
-    data: { username: 'admin', password: 'bookmark-s-e2e-password' },
-  });
-  expect(response.ok()).toBeTruthy();
+  admin = await request.newContext({ baseURL, storageState: { cookies: fixtureCookies(baseURL), origins: [] } });
 });
 
 test.beforeEach(async () => {
@@ -178,7 +175,7 @@ test('admin adds and edits multiple tags with keyboard entry, then sees persiste
   await page.getByRole('button', { name: '添加书签', exact: true }).click();
   await page.getByLabel('网站名称').fill('E2E Editor');
   await page.getByLabel('网站链接').fill('https://e2e.example/editor');
-  await page.getByLabel('所属文件夹').selectOption('development');
+  await page.getByRole('group', { name: '所属文件夹', exact: true }).getByRole('checkbox', { name: '开发工具', exact: true }).check();
   const input = page.getByPlaceholder('输入标签，按 Enter 或逗号添加');
   await input.fill('E2E Shared, E2E Extra');
   await input.press('Enter');

@@ -1,0 +1,18 @@
+.bookmark-folder-field { min-width: 0; margin: 0 0 18px; padding: 0; border: 0; }
+.bookmark-folder-field legend { padding: 0; color: #67735c; font-size: 11px; font-weight: 500; }
+.bookmark-folder-hint { color: #97a18b; font-size: 10px; line-height: 1.8; margin: 8px 0 11px; }
+.bookmark-folder-options { display: flex; align-items: stretch; flex-wrap: wrap; gap: 7px; max-height: 210px; overflow-y: auto; padding: 3px; margin: -3px; }
+.bookmark-folder-option { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 9px 11px; border: 1px solid #e0e7d7; border-radius: 8px; background: #fff; color: #7e8c70; font-size: 11px; line-height: 1.6; cursor: pointer; }
+.bookmark-folder-option.selected { border-color: #b8cda8; background: #edf4e7; color: #5c774b; }
+.bookmark-folder-option:focus-within { outline: 2px solid #63936a; outline-offset: 1px; }
+.bookmark-folder-option input { flex: 0 0 14px; width: 14px; height: 14px; margin: 0; accent-color: #62864f; }
+.bookmark-folder-option > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.bookmark-folder-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; }
+.bookmark-folder-search { margin-bottom: 10px; }
+.bookmark-folder-search input { padding-block: 8px; }
+.bookmark-folder-empty { color: #9aa58e; font-size: 11px; margin: 8px 0; }
+@media (max-width: 480px) {
+  .bookmark-folder-option { padding: 8px 9px; font-size: 11px; }
+  .bookmark-folder-option input { flex-basis: 17px; width: 17px; height: 17px; }
+  .bookmark-folder-search input { font-size: 16px; }
+}

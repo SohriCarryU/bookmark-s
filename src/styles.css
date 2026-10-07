@@ -546,6 +546,16 @@ button svg, a svg { flex-shrink: 0; }
 .page-jump .secondary-button { padding: 6px 10px; font-size: 10px; }
 .collection-pagination .page-jump-error { color: #a46728; text-align: center; }
 .bookmark-author { color: #7c8d6f; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; margin: -2px 0 12px; }
+.bookmark-authors { display: flex; align-items: center; gap: 5px; position: relative; width: 100%; min-width: 0; overflow: hidden; }
+.author-measure { position: absolute; top: 0; left: 0; display: flex; gap: 5px; width: max-content; visibility: hidden; pointer-events: none; white-space: nowrap; }
+.author-measure-name::before { content: attr(data-name); }
+.author-name { flex: 0 0 auto; white-space: nowrap; }
+.author-name.first-author { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.authors-more { flex: 0 0 18px; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: #edf2e7; color: #6a805a; font-size: 12px; line-height: 1; cursor: help; }
+.authors-more:hover, .authors-more:focus-visible { background: #e1ead7; }
+.bookmark-folders { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.bookmark-folders .category-badge { max-width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.card-footer .click-count { flex-shrink: 0; }
 .settings-nav { margin-top: 5px; }
 .topbar-spacer { flex: 1; }
 .topbar-actions:has(.topbar-spacer) { flex: 1; }
