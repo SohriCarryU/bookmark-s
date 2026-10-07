@@ -1,31 +1,31 @@
 .folder-deletion-body { min-width: 0; }
 .folder-deletion-loading, .folder-deletion-success { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 145px; text-align: center; color: #859873; }
-.folder-deletion-loading p, .folder-deletion-success p { margin: 0; color: #919f82; font-size: 12px; line-height: 1.9; }
+.folder-deletion-loading p, .folder-deletion-success p { margin: 0; color: #919f82; font-size: 14px; line-height: 1.9; }
 .folder-deletion-preserve { display: flex; align-items: flex-start; gap: 11px; padding: 14px; margin-bottom: 18px; border: 1px solid #e0e8d6; border-radius: 9px; background: #f2f6ec; color: #88a075; }
 .folder-deletion-preserve > svg { flex-shrink: 0; margin-top: 2px; }
-.folder-deletion-preserve p { margin: 0; color: #809270; font-size: 11px; line-height: 1.9; }
+.folder-deletion-preserve p { margin: 0; color: #809270; font-size: 13px; line-height: 1.9; }
 .folder-deletion-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
 .folder-deletion-counts > div { min-width: 0; padding: 13px 14px; border: 1px solid #e8ede0; border-radius: 8px; background: #fff; }
-.folder-deletion-counts dt { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #8d9c7e; }
+.folder-deletion-counts dt { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #8d9c7e; }
 .folder-deletion-counts dd { margin: 11px 0 8px; color: #657e51; font-size: 23px; font-weight: 600; line-height: 1.4; }
-.folder-deletion-counts dd > span { color: #a0ad92; font-size: 10px; font-weight: 400; }
-.folder-deletion-counts p { margin: 0; color: #9aa78b; font-size: 10px; line-height: 1.8; }
+.folder-deletion-counts dd > span { color: #a0ad92; font-size: 12px; font-weight: 400; }
+.folder-deletion-counts p { margin: 0; color: #9aa78b; font-size: 12px; line-height: 1.8; }
 .folder-deletion-counts p > strong { color: #7e9668; font-weight: 500; }
 .folder-migration-field { min-width: 0; }
 .folder-migration-field select { min-width: 0; max-width: 100%; }
-.folder-migration-hint { font-size: 10px; line-height: 1.9; color: #98a489; margin: 8px 0 0; }
-.folder-migration-unavailable { display: flex; align-items: flex-start; gap: 9px; padding: 13px; margin: 0 0 16px; border: 1px solid #eddfcd; border-radius: 8px; background: #fcf7ee; color: #a28c6b; font-size: 11px; line-height: 1.9; }
+.folder-migration-hint { font-size: 12px; line-height: 1.9; color: #98a489; margin: 8px 0 0; }
+.folder-migration-unavailable { display: flex; align-items: flex-start; gap: 9px; padding: 13px; margin: 0 0 16px; border: 1px solid #eddfcd; border-radius: 8px; background: #fcf7ee; color: #a28c6b; font-size: 13px; line-height: 1.9; }
 .folder-migration-unavailable > svg { flex-shrink: 0; margin-top: 3px; }
 .folder-preview-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
-.folder-preview-footer > p { margin: 0; color: #a4ae98; font-size: 9px; line-height: 1.8; }
-.folder-preview-footer > button { font-size: 10px; }
+.folder-preview-footer > p { margin: 0; color: #a4ae98; font-size: 11px; line-height: 1.8; }
+.folder-preview-footer > button { font-size: 12px; }
 .folder-deletion-body > .form-error { margin-top: 17px; margin-bottom: 0; }
 .folder-deletion-footer { flex-wrap: wrap; }
 @media (max-width: 480px) {
   .folder-deletion-counts { gap: 9px; }
   .folder-deletion-counts > div { padding: 11px; }
   .folder-deletion-preserve { padding: 12px; gap: 9px; }
-  .folder-deletion-preserve p { font-size: 10px; }
+  .folder-deletion-preserve p { font-size: 12px; }
   .folder-migration-field select { font-size: 16px; }
   .folder-deletion-footer > button { flex: 1; }
 }
