@@ -114,8 +114,8 @@ button svg, a svg { flex-shrink: 0; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; width: 28px; height: 28px; padding: 5px; background: transparent; color: #98a08e; }
 .icon-button svg { width: 15px; height: 15px; }
 .icon-button:hover { color: #5e7950; background: #eff3e9; }
-.bookmark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 15px; }
-.bookmark-card { position: relative; min-width: 0; border: 1px solid #e7ebe1; border-radius: 12px; background: #ffffffc9; padding: 18px 18px 13px; transition: transform .2s, box-shadow .2s, border-color .2s; }
+.bookmark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 18px 15px; }
+.bookmark-card { position: relative; min-width: 0; min-height: 280px; border: 1px solid #e7ebe1; border-radius: 14px; background: #ffffffc9; padding: 22px 22px 18px; transition: transform .2s, box-shadow .2s, border-color .2s; }
 .bookmark-card:hover { transform: translateY(-3px); border-color: #c9d7bc; box-shadow: 0 7px 22px #556c390b; }
 .bookmark-card.pinned { border-color: #d9e3ce; background: linear-gradient(145deg, #fcfdf9, #fff); }
 .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -133,7 +133,7 @@ button svg, a svg { flex-shrink: 0; }
 .card-menu .icon-button { width: 23px; height: 25px; }
 .card-menu .is-pinned { background: #edf3e6; color: #63834c; }
 .bookmark-description { font-size: 12px; line-height: 1.8; color: #7b866f; margin: 0 0 17px; height: 3.6em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card-footer { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #f0f2eb; padding-top: 10px; }
+.card-footer { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #f0f2eb; padding-top: 14px; }
 .category-badge { display: inline-flex; gap: 4px; align-items: center; font-size: 10px; padding: 3px 6px; border-radius: 4px; color: #929d82; background: #f1f4eb; }
 .category-badge svg { width: 10px; height: 10px; }
 .click-count { display: flex; align-items: center; gap: 4px; color: #a7af9d; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -194,7 +194,7 @@ button svg, a svg { flex-shrink: 0; }
   .guest-badge { display: none; }
   .hero-art { width: 165px; margin-right: 0; }
   .hero h1 { font-size: 29px; }
-  .bookmark-card { padding: 15px 13px 12px; }
+  .bookmark-card { padding: 19px 17px 16px; }
   .card-top { gap: 8px; }
   .site-icon { width: 33px; height: 33px; }
   .stat-item { padding: 0 12px; }
@@ -249,8 +249,8 @@ button svg, a svg { flex-shrink: 0; }
   .sort-tabs button { padding: 5px 7px; font-size: 11px; }
   .sort-tabs svg { width: 10px; }
   .collection-tools .primary-button { font-size: 12px; padding: 8px; }
-  .bookmark-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); gap: 11px; }
-  .bookmark-card { padding: 14px 12px 10px; }
+  .bookmark-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 14px 11px; }
+  .bookmark-card { min-height: 260px; padding: 18px 16px 14px; }
   .bookmark-open h3 { font-size: 14px; }
   .bookmark-open h3 svg { display: none; }
   .card-top { gap: 8px; margin-bottom: 12px; }
@@ -335,14 +335,14 @@ button svg, a svg { flex-shrink: 0; }
 .spotlight-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #82926d; white-space: nowrap; margin-left: auto; }
 .spotlight-link svg { width: 13px; }
 .spotlight-banner:hover { border-color: #d8e1c8; }
-.card-top { justify-content: space-between; margin-bottom: 13px; }
+.card-top { justify-content: space-between; margin-bottom: 17px; }
 .card-top-right { display: flex; gap: 4px; align-items: center; }
 .bookmark-card.is-pinned { border-color: #dce6d0; background: linear-gradient(145deg, #fdfefb, #fff); }
 .bookmark-open { display: block; }
 .bookmark-open h3 { font-size: 16px; margin-bottom: 3px; justify-content: space-between; }
 .bookmark-open h3 svg { opacity: 1; width: 13px; height: 13px; }
 .bookmark-domain { font-size: 11px; color: #849079; display: block; letter-spacing: .1px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.bookmark-description { font-size: 13px; height: 3.6em; line-height: 1.8; margin-top: 11px; margin-bottom: 14px; }
+.bookmark-description { font-size: 13px; height: 3.6em; line-height: 1.8; margin-top: 14px; margin-bottom: 17px; }
 .category-badge { border: 0; padding: 4px 6px; font-size: 10px; }
 .category-badge > span { width: 3px; height: 3px; background: currentColor; border-radius: 50%; }
 .site-sage { color: #6e8563; background: #eaf0e4; }
@@ -359,7 +359,7 @@ button svg, a svg { flex-shrink: 0; }
 .workspace-footer > span { display: inline-flex; align-items: center; gap: 4px; }
 .workspace-footer svg { color: #9cab8d; }
 .footer-version { color: #c9d0c0; margin: 0 6px; }
-.skeleton-card { height: 222px; }
+.skeleton-card { height: 280px; }
 .skeleton-icon { width: 38px; height: 38px; margin-bottom: 15px; }
 .skeleton-title { width: 100px; height: 13px; margin-bottom: 16px; }
 .skeleton-line { width: 95%; height: 8px; margin-top: 10px; }
@@ -459,8 +459,9 @@ button svg, a svg { flex-shrink: 0; }
   .collection-section .section-heading { gap: 12px; align-items: flex-start; }
   .bookmark-open h3 { font-size: 15px; }
   .bookmark-open h3 svg { width: 11px; height: 11px; display: block; }
-  .bookmark-description { height: 3.6em; font-size: 12px; margin-top: 10px; }
-  .card-top { margin-bottom: 14px; }
+  .bookmark-description { height: 3.6em; font-size: 12px; margin-top: 13px; }
+  .card-top { margin-bottom: 18px; }
+  .skeleton-card { height: 260px; }
   .bookmark-card:has(.card-menu) .card-top { margin-top: 9px; }
   .card-top-right { flex-direction: column; }
   .pin-badge { position: static; font-size: 9px; padding: 2px 4px; }
@@ -515,7 +516,7 @@ button svg, a svg { flex-shrink: 0; }
 .tag-editor-chip:hover { background: #deead4; border-color: #c5d7b4; }
 .active-filters .tag-editor-chip { padding: 3px 5px; font-size: 11px; }
 .bookmark-card { display: flex; flex-direction: column; }
-.bookmark-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -3px 0 12px; }
+.bookmark-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -3px 0 16px; }
 .bookmark-tag { border: 0; border-radius: 4px; color: #718260; background: #f2f5ed; padding: 3px 5px; font-size: 10px; line-height: 1.4; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .bookmark-tag:hover, .bookmark-tag.active { background: #e4edda; color: #608247; }
 .bookmark-untagged, .bookmark-untagged:hover { display: inline-flex; align-items: center; gap: 4px; color: #946814; background: #fff3cc; cursor: default; }
@@ -551,7 +552,7 @@ button svg, a svg { flex-shrink: 0; }
 .page-jump input[aria-invalid="true"] { border-color: #bf8c54; }
 .page-jump .secondary-button { padding: 6px 10px; font-size: 12px; }
 .collection-pagination .page-jump-error { color: #a46728; text-align: center; }
-.bookmark-author { color: #7c8d6f; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; margin: -2px 0 12px; }
+.bookmark-author { color: #7c8d6f; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; margin: -2px 0 16px; }
 .bookmark-authors { display: flex; align-items: center; gap: 5px; position: relative; width: 100%; min-width: 0; overflow: hidden; }
 .author-measure { position: absolute; top: 0; left: 0; display: flex; gap: 5px; width: max-content; visibility: hidden; pointer-events: none; white-space: nowrap; }
 .author-measure-name::before { content: attr(data-name); }
@@ -637,7 +638,7 @@ button svg, a svg { flex-shrink: 0; }
   .active-filters { gap: 6px; padding-block: 10px; }
   .filter-scope, .filter-result, .active-filters .clear-filters { font-size: 10px; }
   .active-filters .tag-editor-chip { font-size: 10px; }
-  .bookmark-tags { gap: 4px; margin-bottom: 10px; }
+  .bookmark-tags { gap: 4px; margin-bottom: 14px; }
   .bookmark-tag { font-size: 10px; padding: 3px 4px; }
   .collection-tools:has(.batch-mode-button) { justify-content: flex-start; flex-basis: 100%; }
   .collection-tools .batch-mode-button { font-size: 12px; padding: 7px 9px; }
