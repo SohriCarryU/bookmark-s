@@ -70,3 +70,36 @@ export type PersonalPreferences = {
   blockedTagIds: string[];
   tags: TagCount[];
 };
+export type OperationBookmark = Bookmark & {
+  categories: Pick<Category, "id" | "name">[];
+};
+export type OperationSummary = {
+  id: string;
+  action: string;
+  actorId: string | null;
+  actorName: string;
+  createdAt: string;
+  bookmarkCount: number;
+  bookmarkTitles: string[];
+  revertedAt: string | null;
+  revertedBy: string | null;
+  revertOf: string | null;
+};
+export type OperationChange = {
+  bookmarkId: string;
+  before: OperationBookmark | null;
+  after: OperationBookmark | null;
+};
+export type OperationDetail = {
+  operation: OperationSummary;
+  changes: OperationChange[];
+  canRevert: boolean;
+  revertReason: string | null;
+  tagChanges?: { before: Tag | null; after: Tag | null }[];
+};
+export type OperationList = {
+  operations: OperationSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+};

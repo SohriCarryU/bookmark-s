@@ -22,6 +22,7 @@ import {
   Grid2X2,
   Hash,
   Heart,
+  History,
   Inbox,
   Leaf,
   LoaderCircle,
@@ -49,6 +50,7 @@ import TagFilters from "./TagFilters";
 import SettingsPage from "./SettingsPage";
 import UsersPage from "./UsersPage";
 import PersonalizationPage from "./PersonalizationPage";
+import OperationsPage from "./OperationsPage";
 import BookmarkAuthors from "./BookmarkAuthors";
 import { CategoryIcon } from "./folderIcons";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
@@ -124,7 +126,7 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("");
   const [jumpError, setJumpError] = useState("");
-  const [view, setView] = useState<"bookmarks" | "settings" | "users" | "personalization">("bookmarks");
+  const [view, setView] = useState<"bookmarks" | "settings" | "users" | "personalization" | "operations">("bookmarks");
   const [batchMode, setBatchMode] = useState(false);
   const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<string[]>([]);
   const [sort, setSort] = useState<"popular" | "recent">("popular");
@@ -268,7 +270,7 @@ export default function App() {
   }, [filter, query, selectedTagIds, tagMatchMode, untagged, sort, pageSize]);
   useEffect(() => {
     if (!isAdmin) {
-      setView((current) => current === "settings" || current === "users" ? "bookmarks" : current);
+      setView((current) => current === "settings" || current === "users" || current === "operations" ? "bookmarks" : current);
       setBatchMode(false);
       setSelectedBookmarkIds([]);
     }
@@ -757,6 +759,16 @@ export default function App() {
             )}
             {isAdmin && (
               <button
+                className={`nav-item settings-nav${view === "operations" ? " active" : ""}`}
+                aria-current={view === "operations" ? "page" : undefined}
+                onClick={() => { setView("operations"); setMobileOpen(false); window.scrollTo(0, 0); }}
+              >
+                <span className="nav-icon"><History size={18} /></span>
+                <span>操作记录</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
                 className={`nav-item settings-nav${view === "users" ? " active" : ""}`}
                 aria-current={view === "users" ? "page" : undefined}
                 onClick={() => { setView("users"); setMobileOpen(false); window.scrollTo(0, 0); }}
@@ -825,7 +837,7 @@ export default function App() {
               <span>我的收藏馆</span>
               <ChevronRight size={14} />
               <strong>
-                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "pinned"
+                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "operations" ? "操作记录" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "pinned"
                   ? "置顶收藏"
                   : (category?.name ?? "全部书签")}
               </strong>
@@ -899,6 +911,10 @@ export default function App() {
           ) : isAdmin && view === "users" ? (
             <main className="main-content">
               <UsersPage currentUser={data!.user!} onChanged={refreshData} onNotify={(message, error) => setToast({ message, error })} />
+            </main>
+          ) : isAdmin && view === "operations" ? (
+            <main className="main-content">
+              <OperationsPage onChanged={async () => { await Promise.all([refreshData(), loadInbox()]); }} onNotify={(message, error) => setToast({ message, error })} />
             </main>
           ) : data?.user && view === "personalization" ? (
             <main className="main-content">

@@ -3,6 +3,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import type { Database, Statement } from './db.js'
 import { hashPassword, verifyPassword } from './password.js'
+import { ApiError } from './errors.js'
+import { auditedMutation, listOperations, operationDetail, revertOperation } from './audit.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -76,10 +78,6 @@ const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replac
 const decode = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0))
 const asBookmark = (bookmark: Bookmark) => ({ ...bookmark, pinned: Boolean(bookmark.pinned) })
 const usernameKey = (value: string) => value.normalize('NFKC').toLowerCase()
-
-class ApiError extends Error {
-  constructor(message: string, public status: 400 | 401 | 403 | 404 | 409 | 429 = 400) { super(message) }
-}
 
 function stringField(value: unknown, label: string, max: number, required = true): string {
   if (typeof value !== 'string') {
@@ -285,12 +283,6 @@ export function createApp(db: Database, config: AppConfig) {
         SELECT ?,value,CAST(key AS INTEGER) FROM json_each(?) WHERE true
         ON CONFLICT(${table}_id,category_id) DO UPDATE SET position = excluded.position`, params: [id, JSON.stringify(categoryIds)] },
     ]
-  }
-
-  function editorStatement(ids: string[], username: string): Statement {
-    return { sql: `INSERT OR IGNORE INTO bookmark_editors (bookmark_id,username)
-      SELECT id,? FROM bookmarks WHERE id IN (SELECT value FROM json_each(?)) AND (created_by IS NULL OR created_by != ?)`,
-    params: [username, JSON.stringify(ids), username] }
   }
 
   async function findBookmark(id: string) {
@@ -554,6 +546,12 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ ok: true })
   })
 
+  app.get('/api/operations', requireAdmin, async c => c.json(await listOperations(db, {
+    q: c.req.query('q'), action: c.req.query('action'), actor: c.req.query('actor'), page: c.req.query('page'), pageSize: c.req.query('pageSize'),
+  })))
+  app.get('/api/operations/:id', requireAdmin, async c => c.json(await operationDetail(db, c.req.param('id')!)))
+  app.post('/api/operations/:id/revert', requireAdmin, async c => c.json(await revertOperation(db, c.req.param('id')!, c.get('user')!)))
+
   app.post('/api/bookmarks/:id/click', async c => {
     rateLimit(c, 'click', 180, 60)
     const result = await db.get<{ url: string; clicks: number }>('UPDATE bookmarks SET clicks = clicks + 1 WHERE id = ? RETURNING url, clicks', [c.req.param('id')])
@@ -567,7 +565,7 @@ export function createApp(db: Database, config: AppConfig) {
     const tags = tagInputs(body.tags)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [url])) throw new ApiError('这个网站已经在书签里了', 409)
     const id = crypto.randomUUID()
-    await db.batch([
+    await auditedMutation(db, 'create', c.get('user')!, { bookmarkIds: [id] }, [
       { sql: 'INSERT INTO bookmarks (id,title,url,description,category_id,created_by) VALUES (?,?,?,?,?,?)', params: [id, title, url, description, categoryId, c.get('user')!.username] },
       ...categoryStatements('bookmark', id, categoryIds),
       ...createTagStatements(tags), assignTagStatement('bookmark', [id], tags),
@@ -591,18 +589,13 @@ export function createApp(db: Database, config: AppConfig) {
     if (body.mode === 'add' && bookmarks.some(bookmark => new Set([
       ...bookmark.tags.map(tag => tagName(tag.name).normalizedName), ...tags.map(tag => tag.normalizedName),
     ]).size > 12)) throw new ApiError('添加后部分书签将超过 12 个标签，请减少标签或选择的书签')
-    const requestedTags = new Set(tags.map(tag => tag.normalizedName))
-    const changed = bookmarks.filter(bookmark => {
-      const existing = new Set(bookmark.tags.map(tag => tagName(tag.name).normalizedName))
-      return body.mode === 'add' ? [...requestedTags].some(tag => !existing.has(tag)) : [...requestedTags].some(tag => existing.has(tag))
-    }).map(bookmark => bookmark.id)
-    await db.batch([...(body.mode === 'add' ? [
+    await auditedMutation(db, 'batch_tags', c.get('user')!, { bookmarkIds: ids }, body.mode === 'add' ? [
       ...createTagStatements(tags), assignTagStatement('bookmark', ids, tags),
     ] : [{
       sql: `DELETE FROM bookmark_tags WHERE bookmark_id IN (SELECT value FROM json_each(?))
         AND tag_id IN (SELECT id FROM tags WHERE normalized_name IN (SELECT value FROM json_each(?)))`,
       params: [JSON.stringify(ids), JSON.stringify(tags.map(tag => tag.normalizedName))],
-    }]), editorStatement(changed, c.get('user')!.username)])
+    }])
     const updated = await withTags(selected, 'bookmark')
     return c.json({ bookmarks: updated.map(asBookmark), tags: await listTags(true) })
   })
@@ -619,9 +612,10 @@ export function createApp(db: Database, config: AppConfig) {
       if ('categoryId' in body) {
         const categoryId = stringField(body.categoryId, '文件夹', 100)
         if (!existing.categoryIds.includes(categoryId)) throw new ApiError('书签不属于这个文件夹')
-        const updated = await db.get<{ bookmark_id: string }>('UPDATE bookmark_categories SET pinned = ? WHERE bookmark_id = ? AND category_id = ? RETURNING bookmark_id', [body.pinned ? 1 : 0, id, categoryId])
-        if (!updated) throw new ApiError('书签已移出这个文件夹，请刷新后重试', 409)
-      } else await db.run('UPDATE bookmarks SET pinned = ? WHERE id = ?', [body.pinned ? 1 : 0, id])
+        await auditedMutation(db, 'pin', c.get('user')!, { bookmarkIds: [id] }, [
+          { sql: 'UPDATE bookmark_categories SET pinned = ? WHERE bookmark_id = ? AND category_id = ?', params: [body.pinned ? 1 : 0, id, categoryId] },
+        ])
+      } else await auditedMutation(db, 'pin', c.get('user')!, { bookmarkIds: [id] }, [{ sql: 'UPDATE bookmarks SET pinned = ? WHERE id = ?', params: [body.pinned ? 1 : 0, id] }])
       return c.json({ bookmark: await findBookmark(id) })
     }
     const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags']
@@ -629,27 +623,29 @@ export function createApp(db: Database, config: AppConfig) {
     if ('pinned' in body && typeof body.pinned !== 'boolean') throw new ApiError('置顶状态格式不正确')
     const value = await validateBookmark({ ...existing, ...body, ...('categoryId' in body && !('categoryIds' in body) ? { categoryIds: [body.categoryId] } : {}) })
     const tags = 'tags' in body ? tagInputs(body.tags) : undefined
-    if (await db.get('SELECT id FROM bookmarks WHERE url = ? AND id != ?', [value.url, id])) throw new ApiError('这个网站已经在书签里了', 409)
-    const changed = value.title !== existing.title || value.url !== existing.url || value.description !== existing.description
-      || JSON.stringify([...value.categoryIds].sort()) !== JSON.stringify([...existing.categoryIds].sort())
-      || tags !== undefined && JSON.stringify(tags.map(tag => tag.normalizedName).sort()) !== JSON.stringify(existing.tags.map(tag => tagName(tag.name).normalizedName).sort())
-    await db.batch([
-      { sql: `UPDATE bookmarks SET title = ?, url = ?, description = ?${'categoryIds' in body || 'categoryId' in body ? ', category_id = ?' : ''}${'pinned' in body ? ', pinned = ?' : ''} WHERE id = ?`,
-        params: [value.title, value.url, value.description, ...('categoryIds' in body || 'categoryId' in body ? [value.categoryId] : []), ...('pinned' in body ? [body.pinned ? 1 : 0] : []), id] },
+    if ('url' in body && await db.get('SELECT id FROM bookmarks WHERE url = ? AND id != ?', [value.url, id])) throw new ApiError('这个网站已经在书签里了', 409)
+    const fields: string[] = []
+    const values: unknown[] = []
+    for (const key of ['title', 'url', 'description'] as const) {
+      if (Object.hasOwn(body, key)) { fields.push(`${key} = ?`); values.push(value[key]) }
+    }
+    if ('categoryIds' in body || 'categoryId' in body) { fields.push('category_id = ?'); values.push(value.categoryId) }
+    if ('pinned' in body) { fields.push('pinned = ?'); values.push(body.pinned ? 1 : 0) }
+    await auditedMutation(db, 'edit', c.get('user')!, { bookmarkIds: [id] }, [
+      ...(fields.length ? [{ sql: `UPDATE bookmarks SET ${fields.join(', ')} WHERE id = ?`, params: [...values, id] }] : []),
       ...('categoryIds' in body || 'categoryId' in body ? categoryStatements('bookmark', id, value.categoryIds) : []),
       ...(tags === undefined ? [] : [
         ...createTagStatements(tags),
         { sql: 'DELETE FROM bookmark_tags WHERE bookmark_id = ?', params: [id] },
         assignTagStatement('bookmark', [id], tags),
       ]),
-      ...(changed ? [editorStatement([id], c.get('user')!.username)] : []),
     ])
     return c.json({ bookmark: await findBookmark(id) })
   })
 
   app.delete('/api/bookmarks/:id', requireAdmin, async c => {
     await findBookmark(c.req.param('id')!)
-    await db.run('DELETE FROM bookmarks WHERE id = ?', [c.req.param('id')])
+    await auditedMutation(db, 'delete', c.get('user')!, { bookmarkIds: [c.req.param('id')!] }, [{ sql: 'DELETE FROM bookmarks WHERE id = ?', params: [c.req.param('id')] }])
     return c.json({ ok: true })
   })
 
@@ -666,14 +662,14 @@ export function createApp(db: Database, config: AppConfig) {
     if (!await db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new ApiError('这个标签不存在', 404)
     const tag = tagName((await readBody(c)).name)
     if (await db.get('SELECT id FROM tags WHERE normalized_name = ? AND id != ?', [tag.normalizedName, id])) throw new ApiError('这个标签已经存在', 409)
-    await db.run('UPDATE tags SET name = ?, normalized_name = ? WHERE id = ?', [tag.name, tag.normalizedName, id])
+    await auditedMutation(db, 'tag_rename', c.get('user')!, { tagIds: [id] }, [{ sql: 'UPDATE tags SET name = ?, normalized_name = ? WHERE id = ?', params: [tag.name, tag.normalizedName, id] }])
     return c.json({ tag: { id, name: tag.name } })
   })
 
   app.delete('/api/tags/:id', requireAdmin, async c => {
     const id = c.req.param('id')!
     if (!await db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new ApiError('这个标签不存在', 404)
-    await db.run('DELETE FROM tags WHERE id = ?', [id])
+    await auditedMutation(db, 'tag_delete', c.get('user')!, { tagIds: [id] }, [{ sql: 'DELETE FROM tags WHERE id = ?', params: [id] }])
     return c.json({ ok: true })
   })
 
@@ -714,13 +710,14 @@ export function createApp(db: Database, config: AppConfig) {
   })
 
   app.post('/api/submissions/:id/approve', requireAdmin, async c => {
-    const id = c.req.param('id')
+    const id = c.req.param('id')!
     const submission = await db.get<Submission>(`SELECT ${submissionFields} FROM submissions WHERE id = ?`, [id])
     if (!submission) throw new ApiError('这条推荐不存在', 404)
     if (submission.status !== 'pending') throw new ApiError('这条推荐已经处理过了', 409)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [submission.url])) throw new ApiError('这个网站已经被收录，可以忽略这条推荐', 409)
-    await db.batch([
-      { sql: "INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id,created_by) SELECT ?,title,url,description,category_id,id,created_by FROM submissions WHERE id = ? AND status = 'pending'", params: [crypto.randomUUID(), id] },
+    const bookmarkId = crypto.randomUUID()
+    await auditedMutation(db, 'approve', c.get('user')!, { bookmarkIds: [bookmarkId], submissionIds: [id] }, [
+      { sql: "INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id,created_by) SELECT ?,title,url,description,category_id,id,created_by FROM submissions WHERE id = ? AND status = 'pending'", params: [bookmarkId, id] },
       { sql: `INSERT INTO bookmark_categories (bookmark_id,category_id,position)
         SELECT bookmarks.id,submission_categories.category_id,submission_categories.position FROM bookmarks
         JOIN submission_categories ON submission_categories.submission_id = bookmarks.source_submission_id
