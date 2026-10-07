@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api, messageOf } from "./api";
 import Modal from "./Modal";
+import FolderIconPicker from "./FolderIconPicker";
 import TagEditor, { collectTagNames } from "./TagEditor";
 import type { Bookmark, BookmarkInput, Category, Tag, User } from "./types";
 import "./forms.css";
@@ -307,6 +308,8 @@ export function CategoryModal({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [icon, setIcon] = useState("Folder");
+  const [color, setColor] = useState("#54775E");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
@@ -317,8 +320,8 @@ export function CategoryModal({
         method: "POST",
         body: JSON.stringify({
           name: String(fields.get("name")).trim(),
-          icon: fields.get("icon"),
-          color: fields.get("color"),
+          icon,
+          color,
         }),
       });
       onSaved(result.category);
@@ -332,6 +335,7 @@ export function CategoryModal({
     <Modal
       title="新建文件夹"
       subtitle="用一个清晰的名字，整理同一类灵感。"
+      wide
       onClose={() => !busy && onClose()}
     >
       <form onSubmit={submit}>
@@ -346,30 +350,17 @@ export function CategoryModal({
               placeholder="例如：效率工具"
             />
           </label>
-          <div className="form-grid">
-            <label className="form-field">
-              图标
-              <select name="icon" defaultValue="folder">
-                <option value="folder">文件夹</option>
-                <option value="code">开发工具</option>
-                <option value="palette">设计灵感</option>
-                <option value="sparkles">人工智能</option>
-                <option value="book">学习阅读</option>
-                <option value="coffee">生活趣味</option>
-                <option value="zap">效率工具</option>
-              </select>
-            </label>
-            <label className="form-field">
-              文件夹颜色
-              <select name="color" defaultValue="#54775E">
-                <option value="#54775E">森林绿</option>
-                <option value="#5689BD">晴空蓝</option>
-                <option value="#9673B8">薰衣草紫</option>
-                <option value="#C18B54">暖杏橙</option>
-                <option value="#BC7C91">樱花粉</option>
-              </select>
-            </label>
-          </div>
+          <label className="form-field">
+            文件夹颜色
+            <select name="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={busy}>
+              <option value="#54775E">森林绿</option>
+              <option value="#5689BD">晴空蓝</option>
+              <option value="#9673B8">薰衣草紫</option>
+              <option value="#C18B54">暖杏橙</option>
+              <option value="#BC7C91">樱花粉</option>
+            </select>
+          </label>
+          <FolderIconPicker value={icon} color={color} onChange={setIcon} disabled={busy} />
           {error && (
             <p className="form-error" role="alert">
               {error}

@@ -11,14 +11,11 @@ import {
   ArrowDownWideNarrow,
   ArrowUpRight,
   Bookmark as BookmarkIcon,
-  BookOpen,
   Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
   Code2,
-  Coffee,
-  Compass,
   ExternalLink,
   Folder,
   Globe2,
@@ -33,7 +30,6 @@ import {
   LockKeyhole,
   Menu,
   MousePointer2,
-  Palette,
   Pencil,
   Pin,
   Plus,
@@ -45,8 +41,6 @@ import {
   Users,
   SlidersHorizontal,
   X,
-  Zap,
-  type LucideIcon,
 } from "lucide-react";
 import { api, messageOf } from "./api";
 import { BookmarkModal, CategoryModal, LoginModal } from "./Forms";
@@ -56,6 +50,7 @@ import SettingsPage from "./SettingsPage";
 import UsersPage from "./UsersPage";
 import PersonalizationPage from "./PersonalizationPage";
 import BookmarkAuthors from "./BookmarkAuthors";
+import { CategoryIcon } from "./folderIcons";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
 import type { Bookmark, Bootstrap, Submission } from "./types";
 
@@ -74,31 +69,6 @@ const compact = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-const icons: Record<string, LucideIcon> = {
-  code: Code2,
-  code2: Code2,
-  development: Code2,
-  palette: Palette,
-  design: Palette,
-  sparkles: Sparkles,
-  ai: Sparkles,
-  book: BookOpen,
-  "book-open": BookOpen,
-  bookopen: BookOpen,
-  learning: BookOpen,
-  coffee: Coffee,
-  lifestyle: Coffee,
-  zap: Zap,
-  productivity: Zap,
-  globe: Globe2,
-  globe2: Globe2,
-  compass: Compass,
-  folder: Folder,
-};
-function CategoryIcon({ name, size = 18 }: { name?: string; size?: number }) {
-  const Icon = icons[name?.toLowerCase() ?? "folder"] ?? Folder;
-  return <Icon size={size} />;
-}
 function domain(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -754,7 +724,7 @@ export default function App() {
                   onClick={() => selectFilter(item.id)}
                   aria-current={view === "bookmarks" && filter === item.id ? "page" : undefined}
                 >
-                  <span className="nav-icon">
+                  <span className="nav-icon" style={{ color: item.color }}>
                     <CategoryIcon name={item.icon} />
                   </span>
                   <span>{item.name}</span>
