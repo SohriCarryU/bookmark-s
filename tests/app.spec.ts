@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('visitor can find bookmarks, follow a link and see its persisted click count', async ({ page, context }) => {
   await context.route('https://github.com/**', route => route.fulfill({ body: 'Example external site' }));
   await page.goto('/');
-  await expect(page.locator('.bookmark-card')).toHaveCount(20);
+  await expect(page.locator('.bookmark-card')).toHaveCount(21);
   await page.getByRole('button', { name: /开发工具/ }).first().click();
   await expect(page.locator('.bookmark-card')).toHaveCount(4);
   await page.getByRole('textbox', { name: '搜索书签' }).fill('GitHub');
@@ -32,7 +32,7 @@ test('recommendation, approval, folder creation and bookmark management work end
   await page.getByLabel('一句话介绍', { exact: false }).fill('来自游客的有用发现');
   await page.getByRole('button', { name: '提交分享', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.locator('.bookmark-card')).toHaveCount(20);
+  await expect(page.locator('.bookmark-card')).toHaveCount(21);
 
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByLabel('用户名', { exact: true }).fill('admin');

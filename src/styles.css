@@ -512,6 +512,8 @@ button svg, a svg { flex-shrink: 0; }
 .bookmark-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -3px 0 12px; }
 .bookmark-tag { border: 0; border-radius: 4px; color: #869479; background: #f2f5ed; padding: 3px 5px; font-size: 8px; line-height: 1.4; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .bookmark-tag:hover, .bookmark-tag.active { background: #e4edda; color: #608247; }
+.bookmark-untagged, .bookmark-untagged:hover { display: inline-flex; align-items: center; gap: 4px; color: #946814; background: #fff3cc; cursor: default; }
+.bookmark-untagged svg { flex-shrink: 0; }
 .bookmark-card .card-footer { margin-top: auto; }
 .bookmark-card.is-selected { background: #f4f8ed; border-color: #91af79; box-shadow: 0 0 0 1px #91af7926; }
 .batch-mode-button.active { background: #e9f0e1; border-color: #c4d5b5; color: #5e7b48; }
@@ -537,6 +539,12 @@ button svg, a svg { flex-shrink: 0; }
 .pagination-controls button[aria-current="page"] { background: #527848; border-color: #527848; color: white; }
 .pagination-controls button:disabled { cursor: default; opacity: .4; }
 .pagination-ellipsis { width: 13px; text-align: center; color: #9caa91; }
+.page-jump { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 12px; max-width: 100%; color: #829174; font-size: 10px; }
+.page-jump label { display: inline-flex; align-items: center; gap: 6px; }
+.page-jump input { width: 58px; min-width: 0; height: 30px; padding: 4px 5px; text-align: center; border: 1px solid #e0e7d7; border-radius: 6px; color: #596f4b; background: #fffefb; font-size: 11px; }
+.page-jump input[aria-invalid="true"] { border-color: #bf8c54; }
+.page-jump .secondary-button { padding: 6px 10px; font-size: 10px; }
+.collection-pagination .page-jump-error { color: #a46728; text-align: center; }
 .bookmark-author { color: #7c8d6f; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; margin: -2px 0 12px; }
 .settings-nav { margin-top: 5px; }
 .topbar-spacer { flex: 1; }

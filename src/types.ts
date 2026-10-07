@@ -24,7 +24,13 @@ export type User = {
   username: string;
   role: "admin" | "user";
   canAddBookmarks: boolean;
+  canPinBookmarks: boolean;
   isOwner: boolean;
+};
+export type SiteSettings = {
+  siteMode: "public" | "private";
+  allowUserAddBookmarks: boolean;
+  allowUserPinBookmarks: boolean;
 };
 export type Submission = {
   id: string;
@@ -43,6 +49,8 @@ export type Bootstrap = {
   bookmarks: Bookmark[];
   user: User | null;
   siteMode: "public" | "private";
+  allowUserAddBookmarks: boolean;
+  allowUserPinBookmarks: boolean;
   canViewContent: boolean;
   stats: {
     totalBookmarks: number;

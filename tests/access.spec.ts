@@ -1,11 +1,12 @@
 import { expect, request, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { Bootstrap, User } from '../src/types';
 
-const mockMember: User = { id: 'mock-member', username: 'mock-member', role: 'user', canAddBookmarks: true, isOwner: false };
+const mockMember: User = { id: 'mock-member', username: 'mock-member', role: 'user', canAddBookmarks: true, canPinBookmarks: false, isOwner: false };
 
 function privateBootstrap(user: User | null): Bootstrap {
   return {
     siteMode: 'private', user, canViewContent: !!user,
+    allowUserAddBookmarks: user?.canAddBookmarks ?? false, allowUserPinBookmarks: user?.canPinBookmarks ?? false,
     categories: user ? [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#6f77eb', sortOrder: 0 }] : [],
     tags: [],
     bookmarks: user ? [{
@@ -78,19 +79,19 @@ test('returning to the window refreshes revoked add permission and closes the op
   let canAddBookmarks = true;
   await page.route('**/api/bootstrap', route => {
     const data = privateBootstrap({ ...mockMember, canAddBookmarks });
-    data.bookmarks = Array.from({ length: 21 }, (_, index) => ({
+    data.bookmarks = Array.from({ length: 51 }, (_, index) => ({
       ...data.bookmarks[0], id: `private-${index}`, title: `Private bookmark ${String(index + 1).padStart(2, '0')}`,
     }));
-    data.stats.totalBookmarks = 21;
-    data.stats.totalClicks = 21;
+    data.stats.totalBookmarks = 51;
+    data.stats.totalClicks = 51;
     return route.fulfill({ json: data, headers: { 'x-e2e-permission': canAddBookmarks ? 'allowed' : 'revoked' } });
   });
   await page.goto('/');
-  await expect(page.locator('.bookmark-card')).toHaveCount(20);
+  await expect(page.locator('.bookmark-card')).toHaveCount(50);
   const secondPage = page.getByRole('navigation', { name: '书签分页' }).getByRole('button', { name: '第 2 页', exact: true });
   await secondPage.click();
   await expect(secondPage).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('link', { name: '打开 Private bookmark 21（新标签页）', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '打开 Private bookmark 51（新标签页）', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '添加书签', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByRole('dialog').getByLabel('网站名称').fill('Unsaved member bookmark');
@@ -103,7 +104,7 @@ test('returning to the window refreshes revoked add permission and closes the op
   await expect(page.getByRole('button', { name: '添加书签', exact: true })).toHaveCount(0);
   await expect(secondPage).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('.bookmark-card')).toHaveCount(1);
-  await expect(page.getByRole('link', { name: '打开 Private bookmark 21（新标签页）', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '打开 Private bookmark 51（新标签页）', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
 });
 
@@ -111,6 +112,7 @@ test.describe('persisted accounts and settings', () => {
   let admin: APIRequestContext;
   let originalBookmarkIds: Set<string>;
   let originalTagIds: Set<string>;
+  let originalUserIds: Set<string>;
   const password = 'bookmark-s-member-e2e-password';
 
   test.beforeAll(async ({ baseURL }) => {
@@ -121,15 +123,17 @@ test.describe('persisted accounts and settings', () => {
   });
 
   test.beforeEach(async () => {
-    expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
+    expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
     const data: Bootstrap = await (await admin.get('/api/bootstrap')).json();
     originalBookmarkIds = new Set(data.bookmarks.map(bookmark => bookmark.id));
     originalTagIds = new Set(data.tags.map(tag => tag.id));
+    const { users }: { users: User[] } = await (await admin.get('/api/users')).json();
+    originalUserIds = new Set(users.map(user => user.id));
   });
 
   test.afterEach(async () => {
     // Always restore guest access, including when a private-mode assertion fails.
-    expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
+    expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
     const data: Bootstrap = await (await admin.get('/api/bootstrap')).json();
     for (const bookmark of data.bookmarks) {
       if (!originalBookmarkIds.has(bookmark.id)) expect((await admin.delete(`/api/bookmarks/${bookmark.id}`)).ok()).toBeTruthy();
@@ -137,60 +141,73 @@ test.describe('persisted accounts and settings', () => {
     for (const tag of data.tags) {
       if (!originalTagIds.has(tag.id)) expect((await admin.delete(`/api/tags/${tag.id}`)).ok()).toBeTruthy();
     }
-    // Unique test accounts are destroyed with the harness's disposable database.
+    const { users }: { users: User[] } = await (await admin.get('/api/users')).json();
+    for (const user of users) {
+      if (!originalUserIds.has(user.id)) expect((await admin.delete(`/api/users/${user.id}`)).ok()).toBeTruthy();
+    }
   });
 
   test.afterAll(async () => { await admin?.dispose(); });
 
-  async function login(page: Page, username: string) {
+  async function login(page: Page, username: string, accountPassword = password) {
     await page.getByRole('button', { name: '登录', exact: true }).first().click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('用户名', { exact: true }).fill(username);
-    await dialog.getByLabel('密码', { exact: true }).fill(password);
+    await dialog.getByLabel('密码', { exact: true }).fill(accountPassword);
     await dialog.getByRole('button', { name: '登录', exact: true }).click();
     await expect(dialog).toHaveCount(0);
   }
 
-  async function savePermissions(page: Page, username: string) {
+  async function saveRole(page: Page, username: string) {
     const responsePromise = page.waitForResponse(response =>
       response.url().includes('/api/users/') && response.request().method() === 'PATCH');
-    await page.getByRole('button', { name: `保存 ${username} 的权限`, exact: true }).click();
+    await page.getByRole('button', { name: `保存 ${username} 的角色`, exact: true }).click();
     expect((await responsePromise).ok()).toBeTruthy();
-    await expect(page.getByRole('button', { name: `保存 ${username} 的权限`, exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: `保存 ${username} 的角色`, exact: true })).toBeDisabled();
   }
 
-  test('admin creates accounts, grants bookmark access and changes roles; member authorship persists after revocation', async ({ page, context, browser, baseURL }) => {
+  async function toggleSetting(page: Page, name: string, enabled: boolean) {
+    const control = page.getByRole('switch', { name, exact: true });
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/settings') && response.request().method() === 'PATCH');
+    await control.click();
+    expect((await saved).ok()).toBeTruthy();
+    await expect(control).toBeEnabled();
+    await expect(control).toHaveAttribute('aria-checked', String(enabled));
+  }
+
+  test('global switches grant all members independent add and pin permissions and preserve authorship after revocation', async ({ page, context, browser, baseURL }) => {
     const username = `e2e-member-${Date.now()}`;
+    const secondUsername = `e2e-second-${Date.now()}`;
+    for (const name of [username, secondUsername]) {
+      expect((await admin.post('/api/users', { data: { username: name, password } })).ok()).toBeTruthy();
+    }
     await context.addCookies((await admin.storageState()).cookies);
     await page.goto('/');
     await page.getByRole('button', { name: '站点配置', exact: true }).click();
-    const create = page.getByRole('region', { name: '创建用户', exact: true });
-    await create.getByLabel('用户名', { exact: true }).fill(username);
-    await create.getByLabel('初始密码', { exact: true }).fill(password);
-    await expect(create.getByRole('combobox', { name: '角色', exact: true })).toHaveValue('user');
-    await expect(create.getByRole('checkbox', { name: '允许添加书签', exact: true })).not.toBeChecked();
-    await create.getByRole('button', { name: '创建账号', exact: true }).click();
-    const permissions = page.getByRole('form', { name: `${username} 的权限`, exact: true });
-    await expect(permissions).toBeVisible();
-    await expect(permissions.getByRole('checkbox', { name: '允许添加书签', exact: true })).not.toBeChecked();
+    await expect(page.getByRole('switch', { name: '允许用户添加书签', exact: true })).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByRole('switch', { name: '允许用户置顶书签', exact: true })).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByRole('region', { name: '创建用户', exact: true })).toHaveCount(0);
     await page.setViewportSize({ width: 320, height: 844 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
     await page.setViewportSize({ width: 1440, height: 1000 });
 
     const memberContext = await browser.newContext({ baseURL });
+    const secondMember = await request.newContext({ baseURL });
     try {
+      expect((await secondMember.post('/api/auth/login', { data: { username: secondUsername, password } })).ok()).toBeTruthy();
       const member = await memberContext.newPage();
       await member.goto('/');
       await login(member, username);
-      await expect(member.locator('.bookmark-card').first()).toBeVisible();
       await expect(member.getByRole('button', { name: '添加书签', exact: true })).toHaveCount(0);
       await expect(member.getByRole('button', { name: '站点配置', exact: true })).toHaveCount(0);
+      await expect(member.getByRole('button', { name: '用户管理', exact: true })).toHaveCount(0);
       const bookmarkInput = { title: 'E2E member authored', url: `https://e2e.example/${username}`, categoryId: 'development' };
       expect((await memberContext.request.post('/api/bookmarks', { data: bookmarkInput })).status()).toBe(403);
       expect((await memberContext.request.get('/api/users')).status()).toBe(403);
 
-      await permissions.getByRole('checkbox', { name: '允许添加书签', exact: true }).check();
-      await savePermissions(page, username);
+      await toggleSetting(page, '允许用户添加书签', true);
+      const secondAllowed: Bootstrap = await (await secondMember.get('/api/bootstrap')).json();
+      expect(secondAllowed.user).toMatchObject({ canAddBookmarks: true, canPinBookmarks: false });
       await member.reload();
       await member.getByRole('button', { name: '添加书签', exact: true }).click();
       const editor = member.getByRole('dialog');
@@ -202,30 +219,121 @@ test.describe('persisted accounts and settings', () => {
       await member.getByRole('textbox', { name: '搜索书签' }).fill(bookmarkInput.title);
       await expect(member.locator('.bookmark-card')).toHaveCount(1);
       await expect(member.locator('.bookmark-card').getByText(`@${username}`, { exact: true })).toBeVisible();
+      await expect(member.getByRole('button', { name: `置顶 ${bookmarkInput.title}`, exact: true })).toHaveCount(0);
       await expect(member.getByRole('button', { name: `编辑 ${bookmarkInput.title}`, exact: true })).toHaveCount(0);
       const stored: Bootstrap = await (await admin.get('/api/bootstrap')).json();
-      expect(stored.bookmarks.find(bookmark => bookmark.url === bookmarkInput.url)?.createdBy).toBe(username);
+      const bookmark = stored.bookmarks.find(item => item.url === bookmarkInput.url)!;
+      expect(bookmark.createdBy).toBe(username);
 
-      await permissions.getByRole('combobox', { name: '角色', exact: true }).selectOption('admin');
-      await savePermissions(page, username);
+      await toggleSetting(page, '允许用户置顶书签', true);
+      const secondPin: Bootstrap = await (await secondMember.get('/api/bootstrap')).json();
+      expect(secondPin.user).toMatchObject({ canAddBookmarks: true, canPinBookmarks: true });
       await member.reload();
-      await expect(member.getByRole('button', { name: '站点配置', exact: true })).toBeVisible();
       await member.getByRole('textbox', { name: '搜索书签' }).fill(bookmarkInput.title);
-      await expect(member.getByRole('button', { name: `编辑 ${bookmarkInput.title}`, exact: true })).toBeVisible();
+      await member.getByRole('button', { name: `置顶 ${bookmarkInput.title}`, exact: true }).click();
+      await expect(member.locator('.pin-badge')).toHaveCount(1);
+      await member.getByRole('button', { name: `取消置顶 ${bookmarkInput.title}`, exact: true }).click();
+      await expect(member.locator('.pin-badge')).toHaveCount(0);
+      expect((await secondMember.patch(`/api/bookmarks/${bookmark.id}`, { data: { pinned: true } })).ok()).toBeTruthy();
+      expect((await secondMember.patch(`/api/bookmarks/${bookmark.id}`, { data: { pinned: false, title: 'Not allowed' } })).status()).toBe(403);
 
-      await permissions.getByRole('combobox', { name: '角色', exact: true }).selectOption('user');
-      await permissions.getByRole('checkbox', { name: '允许添加书签', exact: true }).uncheck();
-      await savePermissions(page, username);
-      // Existing sessions must respect a permission change without another login.
-      expect((await memberContext.request.post('/api/bookmarks', {
-        data: { ...bookmarkInput, url: `${bookmarkInput.url}-revoked` },
-      })).status()).toBe(403);
+      await toggleSetting(page, '允许用户添加书签', false);
+      const pinOnly: Bootstrap = await (await secondMember.get('/api/bootstrap')).json();
+      expect(pinOnly.user).toMatchObject({ canAddBookmarks: false, canPinBookmarks: true });
       await member.reload();
+      await member.getByRole('textbox', { name: '搜索书签' }).fill(bookmarkInput.title);
       await expect(member.getByRole('button', { name: '添加书签', exact: true })).toHaveCount(0);
-      await expect(member.getByRole('button', { name: '站点配置', exact: true })).toHaveCount(0);
-      await member.getByRole('textbox', { name: '搜索书签' }).fill(`@${username}`);
-      await expect(member.locator('.bookmark-card')).toHaveCount(1);
+      await expect(member.getByRole('button', { name: `取消置顶 ${bookmarkInput.title}`, exact: true })).toBeVisible();
+      await toggleSetting(page, '允许用户置顶书签', false);
+      for (const client of [memberContext.request, secondMember]) {
+        expect((await client.post('/api/bookmarks', { data: { ...bookmarkInput, url: `${bookmarkInput.url}-revoked` } })).status()).toBe(403);
+        expect((await client.patch(`/api/bookmarks/${bookmark.id}`, { data: { pinned: false } })).status()).toBe(403);
+        const revoked: Bootstrap = await (await client.get('/api/bootstrap')).json();
+        expect(revoked.user).toMatchObject({ canAddBookmarks: false, canPinBookmarks: false });
+      }
+      await member.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(member.getByRole('button', { name: `取消置顶 ${bookmarkInput.title}`, exact: true })).toHaveCount(0);
       await expect(member.locator('.bookmark-card').getByText(`@${username}`, { exact: true })).toBeVisible();
+    } finally {
+      await memberContext.close();
+      await secondMember.dispose();
+    }
+  });
+
+  test('dedicated user management searches and filters accounts, edits roles, resets passwords and deletes accounts', async ({ page, context, browser, baseURL }) => {
+    const username = `e2e-manage-${Date.now()}`;
+    const resetPassword = 'bookmark-s-reset-e2e-password';
+    await context.addCookies((await admin.storageState()).cookies);
+    await page.goto('/');
+    await page.getByRole('button', { name: '用户管理', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '用户管理', exact: true })).toBeVisible();
+    await expect(page.getByRole('switch', { name: '允许用户添加书签', exact: true })).toHaveCount(0);
+    const create = page.getByRole('region', { name: '创建用户', exact: true });
+    await create.getByLabel('用户名', { exact: true }).fill(username);
+    await create.getByLabel('初始密码', { exact: true }).fill(password);
+    await expect(create.getByRole('combobox', { name: '角色', exact: true })).toHaveValue('user');
+    await expect(create.getByRole('checkbox')).toHaveCount(0);
+    await create.getByRole('button', { name: '创建账号', exact: true }).click();
+    const account = page.getByRole('article', { name: `${username} 的账号`, exact: true });
+    await expect(account).toBeVisible();
+    const search = page.getByLabel('搜索用户名', { exact: true });
+    const roleFilter = page.getByRole('combobox', { name: '筛选角色', exact: true });
+    await search.fill(username);
+    await roleFilter.selectOption('user');
+    await expect(page.getByRole('article')).toHaveCount(1);
+    await roleFilter.selectOption('admin');
+    await expect(account).toHaveCount(0);
+    await roleFilter.selectOption('all');
+    await expect(account).toBeVisible();
+    await account.getByRole('combobox', { name: '角色', exact: true }).selectOption('admin');
+    await saveRole(page, username);
+    await roleFilter.selectOption('admin');
+    await expect(account).toBeVisible();
+    await search.fill('');
+    const owner = page.getByRole('article', { name: 'admin 的账号', exact: true });
+    await expect(owner.getByRole('combobox', { name: '角色', exact: true })).toBeDisabled();
+    await expect(owner.getByRole('button', { name: '删除 admin', exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 320, height: 844 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    const memberContext = await browser.newContext({ baseURL });
+    try {
+      expect((await memberContext.request.post('/api/auth/login', { data: { username, password } })).ok()).toBeTruthy();
+      const member = await memberContext.newPage();
+      await member.goto('/');
+      await member.getByRole('button', { name: '用户管理', exact: true }).click();
+      const ownAccount = member.getByRole('article', { name: `${username} 的账号`, exact: true });
+      await expect(ownAccount.getByRole('button', { name: `删除 ${username}`, exact: true })).toHaveCount(0);
+      await expect(member.getByRole('article', { name: 'admin 的账号', exact: true }).getByRole('button', { name: '删除 admin', exact: true })).toHaveCount(0);
+
+      await account.getByRole('button', { name: `重置 ${username} 的密码`, exact: true }).click();
+      await account.getByLabel('新密码', { exact: true }).fill(resetPassword);
+      const reset = page.waitForResponse(response => response.url().includes('/api/users/') && response.request().method() === 'PATCH');
+      await account.getByRole('button', { name: '确认重置密码', exact: true }).click();
+      expect((await reset).ok()).toBeTruthy();
+      expect((await (await memberContext.request.get('/api/bootstrap')).json()).user).toBeNull();
+      expect((await memberContext.request.get('/api/users')).status()).toBe(401);
+      await member.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(member.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+      expect((await memberContext.request.post('/api/auth/login', { data: { username, password } })).status()).toBe(401);
+      await login(member, username, resetPassword);
+      await expect(member.getByRole('button', { name: '用户管理', exact: true })).toBeVisible();
+
+      await roleFilter.selectOption('all');
+      await account.getByRole('combobox', { name: '角色', exact: true }).selectOption('user');
+      await saveRole(page, username);
+      await member.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(member.getByRole('button', { name: '用户管理', exact: true })).toHaveCount(0);
+      await expect(member.getByRole('button', { name: '站点配置', exact: true })).toHaveCount(0);
+      await account.getByRole('button', { name: `删除 ${username}`, exact: true }).click();
+      const removed = page.waitForResponse(response => response.url().includes('/api/users/') && response.request().method() === 'DELETE');
+      await account.getByRole('button', { name: '确认删除账号', exact: true }).click();
+      expect((await removed).ok()).toBeTruthy();
+      await expect(account).toHaveCount(0);
+      expect((await (await memberContext.request.get('/api/bootstrap')).json()).user).toBeNull();
+      await member.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect(member.getByRole('button', { name: '登录', exact: true })).toBeVisible();
     } finally {
       await memberContext.close();
     }

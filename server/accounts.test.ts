@@ -6,13 +6,14 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createApp } from './app.js'
 import { createSqliteDatabase } from './sqlite.js'
+import type { Database } from './db.js'
 
 const config = { adminUsername: 'admin', adminPassword: 'bookmark-s-demo', sessionSecret: 'accounts-test-secret-at-least-32-characters', secureCookies: false }
 const password = 'a-strong-user-password'
 const input = { title: 'Member resource', url: 'https://member.example', categoryId: 'explore' }
-function setup() {
+function setup(wrapDatabase?: (db: Database) => Database) {
   const db = createSqliteDatabase(':memory:')
-  const app = createApp(db, config)
+  const app = createApp(wrapDatabase ? wrapDatabase(db) : db, config)
   const request = (path: string, method = 'GET', body?: unknown, cookie?: string) => app.request(`http://localhost${path}`, {
     method,
     headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(cookie ? { Cookie: cookie } : {}) },
@@ -37,7 +38,7 @@ test('admin manages accounts with salted hashes, validated names, and an immutab
   assert.equal((await request('/api/users')).status, 401)
   const owner = await login()
   const users = await (await request('/api/users', 'GET', undefined, owner)).json()
-  assert.deepEqual(users.users, [{ id: 'owner', username: 'admin', role: 'admin', canAddBookmarks: true, isOwner: true }])
+  assert.deepEqual(users.users, [{ id: 'owner', username: 'admin', role: 'admin', canAddBookmarks: true, canPinBookmarks: true, isOwner: true }])
   for (const changes of [{ role: 'user' }, { canAddBookmarks: false }, { password: 'another-valid-password' }]) {
     assert.equal((await request('/api/users/owner', 'PATCH', changes, owner)).status, 403)
   }
@@ -74,7 +75,7 @@ test('user creation permission takes effect immediately and never grants managem
   const cookie = await login(reader.username, password)
   assert.equal((await request('/api/bookmarks', 'POST', input)).status, 401)
   assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 403)
-  assert.equal((await request(`/api/users/${reader.id}`, 'PATCH', { canAddBookmarks: true }, owner)).status, 200)
+  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)).status, 200)
   const added = await request('/api/bookmarks', 'POST', { ...input, createdBy: 'admin', role: 'admin', pinned: true }, cookie)
   assert.equal(added.status, 201)
   const { bookmark } = await added.json()
@@ -97,7 +98,7 @@ test('user creation permission takes effect immediately and never grants managem
     ['/api/settings', 'GET', undefined],
     ['/api/settings', 'PATCH', { siteMode: 'private' }],
   ] as const) assert.equal((await request(path, method, body, cookie)).status, 403, `${method} ${path}`)
-  assert.equal((await request(`/api/users/${reader.id}`, 'PATCH', { canAddBookmarks: false }, owner)).status, 200)
+  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: false }, owner)).status, 200)
   assert.equal((await request('/api/bookmarks', 'POST', { ...input, url: 'https://revoked.example' }, cookie)).status, 403)
   assert.equal((await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()).user.canAddBookmarks, false)
   assert.equal((await request(`/api/bookmarks/${bookmark.id}`, 'PATCH', { createdBy: 'forged' }, owner)).status, 400)
@@ -110,14 +111,120 @@ test('promotion and demotion change existing sessions immediately and admins alw
   const owner = await login()
   const reader = await createUser(owner)
   const cookie = await login(reader.username, password)
-  const promoted = await request(`/api/users/${reader.id}`, 'PATCH', { role: 'admin', canAddBookmarks: false }, owner)
+  const promoted = await request(`/api/users/${reader.id}`, 'PATCH', { role: 'admin' }, owner)
   assert.equal((await promoted.json()).user.canAddBookmarks, true)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, cookie)).status, 200)
   assert.equal((await request(`/api/users/${reader.id}`, 'PATCH', { role: 'user' }, owner)).status, 200)
   assert.equal((await request('/api/settings', 'GET', undefined, cookie)).status, 403)
   assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 403)
-  const admin = await createUser(owner, 'second-admin', { role: 'admin', canAddBookmarks: false })
+  const admin = await createUser(owner, 'second-admin', { role: 'admin' })
   assert.equal(admin.canAddBookmarks, true)
+  assert.equal(admin.canPinBookmarks, true)
+})
+
+test('site permissions apply to all existing sessions independently and ignore old per-user grants', async t => {
+  const { db, request, login, createUser } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  const first = await createUser(owner, 'first')
+  const second = await createUser(owner, 'second')
+  const cookies = [await login(first.username, password), await login(second.username, password)]
+  // Old installations may still contain individual grants; these must not affect capabilities.
+  await db.run('UPDATE users SET can_add_bookmarks = 1 WHERE id = ?', [first.id])
+  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false }
+  assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
+  for (const [allowUserAddBookmarks, allowUserPinBookmarks] of [[false, false], [true, false], [false, true], [true, true], [false, false]]) {
+    const response = await request('/api/settings', 'PATCH', { allowUserAddBookmarks, allowUserPinBookmarks }, owner)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinBookmarks })
+    for (const [index, cookie] of cookies.entries()) {
+      const state = await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()
+      assert.equal(state.user.canAddBookmarks, allowUserAddBookmarks)
+      assert.equal(state.user.canPinBookmarks, allowUserPinBookmarks)
+      const added = await request('/api/bookmarks', 'POST', { ...input, url: `https://matrix-${index}-${allowUserAddBookmarks}-${allowUserPinBookmarks}.example` }, cookie)
+      assert.equal(added.status, allowUserAddBookmarks ? 201 : 403)
+      const pinned = await request('/api/bookmarks/github', 'PATCH', { pinned: false }, cookie)
+      assert.equal(pinned.status, allowUserPinBookmarks ? 200 : 403)
+    }
+    const listed = await (await request('/api/users', 'GET', undefined, owner)).json()
+    assert.ok(listed.users.filter((user: { role: string }) => user.role === 'user').every((user: { canAddBookmarks: boolean; canPinBookmarks: boolean }) => user.canAddBookmarks === allowUserAddBookmarks && user.canPinBookmarks === allowUserPinBookmarks))
+    const ownerState = await (await request('/api/bootstrap', 'GET', undefined, owner)).json()
+    assert.equal(ownerState.user.canAddBookmarks, true)
+    assert.equal(ownerState.user.canPinBookmarks, true)
+  }
+  assert.equal((await request('/api/bookmarks', 'POST', { ...input, url: 'https://owner-can-add.example' }, owner)).status, 201)
+  assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true }, owner)).status, 200)
+  assert.equal((await request('/api/users', 'POST', { username: 'old-grant', password, canAddBookmarks: true }, owner)).status, 400)
+  assert.equal((await request(`/api/users/${first.id}`, 'PATCH', { canAddBookmarks: true }, owner)).status, 400)
+})
+
+test('settings partially update atomically and pin-only users cannot change any other bookmark field', async t => {
+  const { db, request, login, createUser } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  await request('/api/settings', 'PATCH', { allowUserPinBookmarks: true }, owner)
+  const reader = await createUser(owner)
+  assert.equal(reader.canPinBookmarks, true)
+  assert.equal(reader.canAddBookmarks, false)
+  const cookie = await login(reader.username, password)
+  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: true }
+  assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
+  for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinBookmarks: 1 }, { siteMode: 'invalid', allowUserAddBookmarks: true }, { allowUserPinBookmarks: false, allowUserAddBookmarks: null }]) {
+    assert.equal((await request('/api/settings', 'PATCH', changes, owner)).status, 400)
+    assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
+  }
+  const before = await db.get('SELECT * FROM bookmarks WHERE id = ?', ['github'])
+  for (const changes of [{ title: 'forged' }, { pinned: false, title: 'forged' }, { pinned: false, createdBy: 'forged' }, { pinned: false, tags: [] }, { pinned: false, url: 'https://forged.example' }, { pinned: false, clicks: 99999 }]) {
+    assert.equal((await request('/api/bookmarks/github', 'PATCH', changes, cookie)).status, 403)
+    assert.deepEqual(await db.get('SELECT * FROM bookmarks WHERE id = ?', ['github']), before)
+  }
+  for (const pinned of [null, 'true', 1]) assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned }, cookie)).status, 400)
+  const unpinned = await request('/api/bookmarks/github', 'PATCH', { pinned: false }, cookie)
+  assert.equal(unpinned.status, 200)
+  assert.equal((await unpinned.json()).bookmark.pinned, false)
+  assert.equal((await (await request('/api/bookmarks/github', 'PATCH', { pinned: true }, cookie)).json()).bookmark.pinned, true)
+  assert.equal((await request('/api/bookmarks/missing', 'PATCH', { pinned: true }, cookie)).status, 404)
+  assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true })).status, 401)
+  assert.equal((await request('/api/bookmarks/github', 'DELETE', undefined, cookie)).status, 403)
+  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, cookie)).status, 403)
+})
+
+test('user search filters names and roles while deletion preserves history and immediately revokes sessions', async t => {
+  const { db, request, login, createUser } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  const alice = await createUser(owner, 'Alice')
+  const secondAdmin = await createUser(owner, 'alice-admin', { role: 'admin' })
+  await createUser(owner, 'Bob')
+  const cookie = await login(alice.username, password)
+  const adminCookie = await login(secondAdmin.username, password)
+  const search = async (query: string) => (await (await request(`/api/users?${query}`, 'GET', undefined, owner)).json()).users
+  assert.deepEqual((await search('q=ALICE')).map((user: { username: string }) => user.username).sort(), ['Alice', 'alice-admin'])
+  assert.deepEqual((await search('q=Alice&role=user')).map((user: { id: string }) => user.id), [alice.id])
+  assert.deepEqual((await search('q=ＡＬＩＣＥ&role=admin')).map((user: { id: string }) => user.id), [secondAdmin.id])
+  assert.equal((await search('role=admin')).length, 2)
+  assert.equal((await search('q=%25')).length, 0)
+  assert.equal((await request('/api/users?role=guest', 'GET', undefined, owner)).status, 400)
+  assert.equal((await request('/api/users?q=Alice', 'GET', undefined, cookie)).status, 403)
+  assert.equal((await request('/api/users/owner', 'DELETE', undefined, owner)).status, 403)
+  assert.equal((await request(`/api/users/${secondAdmin.id}`, 'DELETE', undefined, adminCookie)).status, 403)
+  assert.equal((await request(`/api/users/${alice.id}`, 'DELETE', undefined, cookie)).status, 403)
+  assert.equal((await request(`/api/users/${alice.id}`, 'DELETE')).status, 401)
+  await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)
+  const bookmark = (await (await request('/api/bookmarks', 'POST', input, cookie)).json()).bookmark
+  const submission = (await (await request('/api/submissions', 'POST', { ...input, url: 'https://alice-pending.example' }, cookie)).json()).submission
+  assert.equal((await request(`/api/users/${alice.id}`, 'DELETE', undefined, owner)).status, 200)
+  assert.equal((await request(`/api/users/${alice.id}`, 'DELETE', undefined, owner)).status, 404)
+  assert.equal((await request('/api/auth/login', 'POST', { username: 'Alice', password })).status, 401)
+  const state = await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()
+  assert.equal(state.user, null)
+  assert.equal(state.bookmarks.find((item: { id: string }) => item.id === bookmark.id).createdBy, 'Alice')
+  assert.equal((await request('/api/bookmarks', 'POST', { ...input, url: 'https://deleted-alice.example' }, cookie)).status, 401)
+  const approved = await request(`/api/submissions/${submission.id}/approve`, 'POST', undefined, owner)
+  assert.equal(approved.status, 200)
+  assert.equal((await approved.json()).bookmark.createdBy, 'Alice')
+  await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)
+  assert.equal((await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()).canViewContent, false)
 })
 
 test('private mode returns an empty anonymous bootstrap and blocks every content endpoint', async t => {
@@ -133,7 +240,7 @@ test('private mode returns an empty anonymous bootstrap and blocks every content
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'secret' }, owner)).status, 400)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)).status, 200)
   assert.deepEqual(await (await request('/api/bootstrap')).json(), {
-    siteMode: 'private', canViewContent: false, user: null, categories: [], bookmarks: [], tags: [],
+    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   })
   for (const [path, method, body] of [
@@ -179,7 +286,8 @@ test('reset passwords invalidate existing cookies and only accept the new passwo
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
-  const reader = await createUser(owner, 'reader', { canAddBookmarks: true })
+  const reader = await createUser(owner, 'reader')
+  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)).status, 200)
   const cookie = await login(reader.username, password)
   assert.equal((await request(`/api/users/${reader.id}`, 'PATCH', { password: 'replacement-password' }, owner)).status, 200)
   assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 401)
@@ -189,6 +297,40 @@ test('reset passwords invalidate existing cookies and only accept the new passwo
   assert.equal((await request('/api/bookmarks', 'POST', input, refreshed)).status, 201)
   await db.run('DELETE FROM users WHERE id = ?', [reader.id])
   assert.equal((await request('/api/bookmarks', 'POST', { ...input, url: 'https://deleted.example' }, refreshed)).status, 401)
+})
+
+test('a concurrent password reset cannot undo an administrator demotion', async t => {
+  let heldId: string | undefined
+  let captureRead!: () => void
+  let releaseRead!: () => void
+  const readCaptured = new Promise<void>(resolve => { captureRead = resolve })
+  const readReleased = new Promise<void>(resolve => { releaseRead = resolve })
+  const { db, request, login, createUser } = setup(database => ({
+    ...database,
+    async get<T>(sql: string, params?: unknown[]) {
+      const row = await database.get<T>(sql, params)
+      if (heldId && params?.[0] === heldId && sql.startsWith('SELECT id, username, role,')) {
+        heldId = undefined
+        captureRead()
+        await readReleased
+      }
+      return row
+    },
+  }))
+  t.after(() => { releaseRead(); db.close() })
+  const owner = await login()
+  const admin = await createUser(owner, 'managed-admin', { role: 'admin' })
+  heldId = admin.id
+  const resetting = request(`/api/users/${admin.id}`, 'PATCH', { password: 'replacement-password' }, owner)
+  await readCaptured
+  const demoted = await request(`/api/users/${admin.id}`, 'PATCH', { role: 'user' }, owner)
+  assert.equal(demoted.status, 200)
+  releaseRead()
+  const reset = await resetting
+  assert.equal(reset.status, 200)
+  assert.equal((await reset.json()).user.role, 'user')
+  const cookie = await login(admin.username, 'replacement-password')
+  assert.equal((await request('/api/settings', 'GET', undefined, cookie)).status, 403)
 })
 
 test('account migration preserves old content and keeps mode, users and authors after restart', async () => {
@@ -216,6 +358,40 @@ test('account migration preserves old content and keeps mode, users and authors 
     assert.equal((await db.all('SELECT id FROM users')).length, 1)
     assert.equal((await db.get<{ created_by: string }>("SELECT created_by FROM bookmarks WHERE id = 'github'"))?.created_by, 'member')
     assert.equal((await db.all('SELECT id FROM bookmarks')).length, 21)
+  } finally {
+    db.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('site-permission migration preserves accounts and content while defaults stay disabled until explicitly enabled', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'bookmark-s-site-permissions-'))
+  const filename = join(directory, 'data.sqlite')
+  const old = new DatabaseSync(filename)
+  for (const migration of ['0001_initial.sql', '0002_tags.sql', '0003_accounts.sql']) {
+    old.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'))
+  }
+  old.exec("INSERT INTO users (id,username,username_key,password_hash,can_add_bookmarks) VALUES ('legacy','Legacy','legacy','legacy-salted-hash',1)")
+  old.exec("UPDATE settings SET value = 'private' WHERE key = 'site_mode'")
+  old.exec("UPDATE bookmarks SET created_by = 'Legacy', clicks = 8899 WHERE id = 'github'")
+  const originalUsers = old.prepare('SELECT * FROM users ORDER BY id').all()
+  const originalBookmarks = old.prepare('SELECT * FROM bookmarks ORDER BY id').all()
+  old.close()
+  let db = createSqliteDatabase(filename)
+  try {
+    assert.deepEqual(await db.all('SELECT * FROM users ORDER BY id'), originalUsers)
+    assert.deepEqual(await db.all('SELECT * FROM bookmarks ORDER BY id'), originalBookmarks)
+    for (const key of ['allow_user_add_bookmarks', 'allow_user_pin_bookmarks']) {
+      assert.equal((await db.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]))?.value, '0')
+    }
+    assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'site_mode'"))?.value, 'private')
+    await db.run("UPDATE settings SET value = '1' WHERE key = 'allow_user_pin_bookmarks'")
+    db.close()
+    db = createSqliteDatabase(filename)
+    assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'allow_user_pin_bookmarks'"))?.value, '1')
+    assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'allow_user_add_bookmarks'"))?.value, '0')
+    assert.deepEqual(await db.all('SELECT * FROM users ORDER BY id'), originalUsers)
+    assert.deepEqual(await db.all('SELECT * FROM bookmarks ORDER BY id'), originalBookmarks)
   } finally {
     db.close()
     rmSync(directory, { recursive: true, force: true })

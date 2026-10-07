@@ -167,3 +167,10 @@ ALTER TABLE submissions ADD COLUMN created_by TEXT;
 INSERT OR IGNORE INTO settings (key,value) VALUES ('site_mode','public');
 INSERT OR IGNORE INTO settings (key,value) VALUES ('migration_0003_accounts','1');
 `
+
+// Keep migrations/0004_site_permissions.sql in sync; upgrade and seed parity are tested.
+export const sitePermissionsMigrationSql = `-- User capabilities are shared site settings; legacy per-user grants no longer apply.
+INSERT OR IGNORE INTO settings (key,value) VALUES ('allow_user_add_bookmarks','0');
+INSERT OR IGNORE INTO settings (key,value) VALUES ('allow_user_pin_bookmarks','0');
+INSERT OR IGNORE INTO settings (key,value) VALUES ('migration_0004_site_permissions','1');
+`

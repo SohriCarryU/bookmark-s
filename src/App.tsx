@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type MouseEvent,
 } from "react";
 import {
@@ -14,6 +15,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   Code2,
   Coffee,
   Compass,
@@ -40,6 +42,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Users,
   X,
   Zap,
   type LucideIcon,
@@ -49,6 +52,7 @@ import { BookmarkModal, CategoryModal, LoginModal } from "./Forms";
 import Modal from "./Modal";
 import TagFilters from "./TagFilters";
 import SettingsPage from "./SettingsPage";
+import UsersPage from "./UsersPage";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
 import type { Bookmark, Bootstrap, Submission } from "./types";
 
@@ -143,9 +147,11 @@ export default function App() {
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [tagMatchMode, setTagMatchMode] = useState<"all" | "any">("all");
   const [untagged, setUntagged] = useState(false);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(1);
-  const [view, setView] = useState<"bookmarks" | "settings">("bookmarks");
+  const [jumpPage, setJumpPage] = useState("");
+  const [jumpError, setJumpError] = useState("");
+  const [view, setView] = useState<"bookmarks" | "settings" | "users">("bookmarks");
   const [batchMode, setBatchMode] = useState(false);
   const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<string[]>([]);
   const [sort, setSort] = useState<"popular" | "recent">("popular");
@@ -177,6 +183,7 @@ export default function App() {
   const tags = data?.tags ?? [];
   const isAdmin = data?.user?.role === "admin";
   const canAddBookmarks = isAdmin || !!data?.user?.canAddBookmarks;
+  const canPinBookmarks = isAdmin || !!data?.user?.canPinBookmarks;
   const canViewContent = data?.canViewContent ?? false;
   const hasLoadedData = data !== null;
 
@@ -282,6 +289,8 @@ export default function App() {
   }, [canViewContent, canAddBookmarks, isAdmin]);
   useEffect(() => {
     setPage(1);
+    setJumpPage("");
+    setJumpError("");
     setSelectedBookmarkIds([]);
   }, [filter, query, selectedTagIds, tagMatchMode, untagged, sort, pageSize]);
   useEffect(() => {
@@ -424,9 +433,20 @@ export default function App() {
     setSelectedBookmarkIds([]);
   }, [currentPage]);
   function changePage(value: number) {
-    setPage(value);
+    setPage(Math.max(1, Math.min(value, pageCount)));
+    setJumpPage("");
+    setJumpError("");
     setSelectedBookmarkIds([]);
     collectionRef.current?.scrollIntoView({ block: "start" });
+  }
+  function jumpToPage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = Number(jumpPage);
+    if (!/^\d+$/.test(jumpPage) || !Number.isSafeInteger(value) || value < 1 || value > pageCount) {
+      setJumpError(`请输入 1–${pageCount} 之间的整数页码`);
+      return;
+    }
+    changePage(value);
   }
   const hasFilters =
     filter !== "all" || !!query.trim() || selectedTagIds.length > 0 || untagged;
@@ -755,6 +775,16 @@ export default function App() {
             )}
             {isAdmin && (
               <button
+                className={`nav-item settings-nav${view === "users" ? " active" : ""}`}
+                aria-current={view === "users" ? "page" : undefined}
+                onClick={() => { setView("users"); setMobileOpen(false); window.scrollTo(0, 0); }}
+              >
+                <span className="nav-icon"><Users size={18} /></span>
+                <span>用户管理</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
                 className={`nav-item settings-nav${view === "settings" ? " active" : ""}`}
                 aria-current={view === "settings" ? "page" : undefined}
                 onClick={() => { setView("settings"); setMobileOpen(false); window.scrollTo(0, 0); }}
@@ -803,7 +833,7 @@ export default function App() {
               <span>我的收藏馆</span>
               <ChevronRight size={14} />
               <strong>
-                {view === "settings" ? "站点配置" : !canViewContent ? "收藏馆" : filter === "pinned"
+                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : !canViewContent ? "收藏馆" : filter === "pinned"
                   ? "置顶收藏"
                   : (category?.name ?? "全部书签")}
               </strong>
@@ -869,11 +899,14 @@ export default function App() {
           {isAdmin && view === "settings" ? (
             <main className="main-content">
               <SettingsPage
-                siteMode={data!.siteMode}
-                currentUser={data!.user!}
+                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinBookmarks: data!.allowUserPinBookmarks }}
                 onChanged={refreshData}
                 onNotify={(message, error) => setToast({ message, error })}
               />
+            </main>
+          ) : isAdmin && view === "users" ? (
+            <main className="main-content">
+              <UsersPage currentUser={data!.user!} onChanged={refreshData} onNotify={(message, error) => setToast({ message, error })} />
             </main>
           ) : data && !canViewContent ? (
             <main className="main-content private-site">
@@ -1254,7 +1287,7 @@ export default function App() {
                                 置顶
                               </span>
                             )}
-                            {isAdmin && (
+                            {canPinBookmarks && (
                               <div className="card-menu">
                                 <button
                                   className={`icon-button${bookmark.pinned ? " pin-active" : ""}`}
@@ -1267,7 +1300,7 @@ export default function App() {
                                 >
                                   <Pin size={14} />
                                 </button>
-                                <button
+                                {isAdmin && <><button
                                   className="icon-button"
                                   title="编辑书签"
                                   aria-label={`编辑 ${bookmark.title}`}
@@ -1286,7 +1319,7 @@ export default function App() {
                                   }
                                 >
                                   <Trash2 size={14} />
-                                </button>
+                                </button></>}
                               </div>
                             )}
                           </div>
@@ -1329,7 +1362,7 @@ export default function App() {
                               </button>
                             ))
                           ) : (
-                            <span className="bookmark-untagged">未打标签</span>
+                            <span className="bookmark-tag bookmark-untagged"><CircleAlert size={10} aria-hidden="true" />未打标签</span>
                           )}
                         </div>
                         {bookmark.createdBy && (
@@ -1377,6 +1410,28 @@ export default function App() {
                     ))}
                     <button aria-label="下一页" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}><ChevronRight size={16} /></button>
                   </nav>
+                  <form className="page-jump" onSubmit={jumpToPage} noValidate>
+                    <span>共 {pageCount} 页</span>
+                    <label>
+                      跳至
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        aria-label="跳转页码"
+                        aria-invalid={!!jumpError}
+                        aria-describedby={jumpError ? "page-jump-error" : undefined}
+                        min={1}
+                        max={pageCount}
+                        step={1}
+                        value={jumpPage}
+                        placeholder={String(currentPage)}
+                        onChange={(event) => { setJumpPage(event.target.value); setJumpError(""); }}
+                      />
+                      页
+                    </label>
+                    <button className="secondary-button" type="submit">跳转</button>
+                  </form>
+                  {jumpError && <p id="page-jump-error" className="page-jump-error" role="alert">{jumpError}</p>}
                 </div>
               )}
             </section>

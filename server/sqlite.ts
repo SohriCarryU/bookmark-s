@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { Database, Statement } from './db.js'
-import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql } from './schema.js'
+import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql, sitePermissionsMigrationSql } from './schema.js'
 
 export function createSqliteDatabase(filename: string): Database & { close(): void } {
   const sqlite = new DatabaseSync(filename)
@@ -25,6 +25,16 @@ export function createSqliteDatabase(filename: string): Database & { close(): vo
   if (!accountsMigrated) {
     try {
       sqlite.exec(`BEGIN IMMEDIATE; ${accountsMigrationSql} COMMIT;`)
+    } catch (error) {
+      sqlite.exec('ROLLBACK')
+      sqlite.close()
+      throw error
+    }
+  }
+  const permissionsMigrated = sqlite.prepare("SELECT value FROM settings WHERE key = 'migration_0004_site_permissions'").get()
+  if (!permissionsMigrated) {
+    try {
+      sqlite.exec(`BEGIN IMMEDIATE; ${sitePermissionsMigrationSql} COMMIT;`)
     } catch (error) {
       sqlite.exec('ROLLBACK')
       sqlite.close()

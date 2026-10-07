@@ -152,6 +152,8 @@ test('untagged-only and empty folders have useful empty states and can recover a
   const folders = page.getByRole('navigation', { name: '书签文件夹' });
   const bookmarkSearch = page.getByRole('textbox', { name: '搜索书签' });
   await bookmarkSearch.fill('E2E Untagged Scope');
+  await expect(page.locator('.bookmark-untagged')).toHaveClass(/bookmark-tag/);
+  await expect(page.locator('.bookmark-untagged svg')).toHaveCount(1);
   await folders.getByRole('button', { name: /开发工具/ }).click();
   await expect(options.locator('.tag-filter-pill')).toHaveCount(1);
   await expect(options).toContainText('当前范围的书签尚未添加标签');
@@ -277,7 +279,26 @@ test('600 bookmarks use numbered pages and page sizes while filters search the e
   await expect(page.locator('.filter-result')).toHaveText('找到 600 个网站');
   const pagination = page.getByRole('navigation', { name: '书签分页' });
   const pageSize = page.getByRole('combobox', { name: '每页显示' });
-  await expect(pageSize).toHaveValue('20');
+  await expect(pageSize).toHaveValue('50');
+  await expect(page.locator('.bookmark-card')).toHaveCount(50);
+  const jump = page.getByLabel('跳转页码', { exact: true });
+  await jump.fill('6');
+  await page.getByRole('button', { name: '跳转', exact: true }).click();
+  await expect(pagination.getByRole('button', { name: '第 6 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await jump.fill('12');
+  await page.getByRole('button', { name: '跳转', exact: true }).click();
+  await expect(pagination.getByRole('button', { name: '下一页', exact: true })).toBeDisabled();
+  for (const invalid of ['0', '13', '1.5', '']) {
+    await jump.fill(invalid);
+    await page.getByRole('button', { name: '跳转', exact: true }).click();
+    await expect(pagination.getByRole('button', { name: '第 12 页', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(jump).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByRole('alert')).toContainText('12');
+  }
+  await jump.fill('1');
+  await page.getByRole('button', { name: '跳转', exact: true }).click();
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await pageSize.selectOption('20');
   await expect(page.locator('.bookmark-card')).toHaveCount(20);
   await expect(page.getByRole('button', { name: /再显示/ })).toHaveCount(0);
   await expect(pagination.getByRole('button', { name: '上一页', exact: true })).toBeDisabled();
