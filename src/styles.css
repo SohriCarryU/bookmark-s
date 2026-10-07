@@ -527,7 +527,26 @@ button svg, a svg { flex-shrink: 0; }
 .batch-hint { flex-basis: 100%; font-size: 9px; color: #a2ae96; margin: -4px 0 0; }
 .collection-pagination { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0 19px; }
 .collection-pagination p, .collection-complete { color: #9ba88e; font-size: 10px; margin: 0; }
-.collection-pagination .secondary-button { min-width: 180px; background: #f6f8f1; }
+.collection-section { scroll-margin-top: 92px; }
+.page-size-control { display: inline-flex; align-items: center; flex-shrink: 0; gap: 6px; font-size: 10px; color: #7c8c6e; white-space: nowrap; }
+.page-size-control select { background: #f7f9f2; border: 1px solid #e0e7d7; border-radius: 7px; color: #596f4b; padding: 7px 5px; font-size: 11px; cursor: pointer; }
+.pagination-controls, .pagination-item { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.pagination-controls { flex-wrap: wrap; }
+.pagination-controls button { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #e0e7d7; border-radius: 7px; background: #fffefb; color: #6f835f; font-size: 11px; }
+.pagination-controls button:hover:not(:disabled) { background: #edf3e6; }
+.pagination-controls button[aria-current="page"] { background: #527848; border-color: #527848; color: white; }
+.pagination-controls button:disabled { cursor: default; opacity: .4; }
+.pagination-ellipsis { width: 13px; text-align: center; color: #9caa91; }
+.bookmark-author { color: #7c8d6f; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; margin: -2px 0 12px; }
+.settings-nav { margin-top: 5px; }
+.topbar-spacer { flex: 1; }
+.topbar-actions:has(.topbar-spacer) { flex: 1; }
+.admin-badge { max-width: 180px; min-width: 0; }
+.admin-badge > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.private-site { min-height: calc(100dvh - 78px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 15px; padding-block: 60px; }
+.private-site > svg { color: #769465; }
+.private-site h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 600; color: #45603a; }
+.private-site p { margin: 0 0 10px; max-width: 360px; line-height: 1.9; color: #8b9881; font-size: 12px; }
 .tag-editor { display: flex; flex-direction: column; gap: 9px; margin-bottom: 18px; }
 .tag-editor > label { color: #67735c; font-size: 11px; font-weight: 500; }
 .tag-editor > label .field-hint { margin-left: 6px; font-size: 9px; }
@@ -619,6 +638,7 @@ button svg, a svg { flex-shrink: 0; }
 
 @media (max-width: 380px) {
   .main-content { padding-inline: 16px; }
+  .pagination-controls button { width: 30px; height: 30px; }
   .stat-item { gap: 5px; padding-inline: 7px; }
   .stat-icon { flex-shrink: 0; width: 24px; height: 24px; }
   .stat-item strong { font-size: 15px; }

@@ -45,7 +45,7 @@ export function LoginModal({
   return (
     <Modal
       title="欢迎回来"
-      subtitle="登录后，打理你的互联网收藏馆。"
+      subtitle="登录你的账号，访问收藏馆。"
       onClose={() => !busy && onClose()}
     >
       <form onSubmit={submit}>
@@ -54,13 +54,13 @@ export function LoginModal({
             <LockKeyhole size={24} />
           </div>
           <label className="form-field">
-            管理员账号
+            用户名
             <input
               data-autofocus
               name="username"
               autoComplete="username"
               required
-              placeholder="输入管理员账号"
+              placeholder="输入用户名"
               maxLength={80}
             />
           </label>
@@ -96,7 +96,7 @@ export function LoginModal({
             ) : (
               <ArrowUpRight size={16} />
             )}
-            登录管理
+            登录
           </button>
         </div>
       </form>

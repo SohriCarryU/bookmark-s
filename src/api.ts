@@ -8,10 +8,14 @@ export async function api<T>(
     headers: { "Content-Type": "application/json", ...options.headers },
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok)
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      window.dispatchEvent(new Event("bookmark-s:access-changed"));
+    }
     throw new Error(
       result.error || `请求失败（${response.status}），请稍后再试。`,
     );
+  }
   return result as T;
 }
 

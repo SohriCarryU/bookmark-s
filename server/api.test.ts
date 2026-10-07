@@ -156,13 +156,15 @@ test('Cloudflare migration and local initialization produce the same schema and 
   t.after(() => { local.close(); migration.close() })
   migration.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0002_tags.sql', import.meta.url), 'utf8'))
-  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags']) {
+  migration.exec(readFileSync(new URL('../migrations/0003_accounts.sql', import.meta.url), 'utf8'))
+  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users']) {
     assert.deepEqual(await local.all(`PRAGMA table_info(${table})`), migration.prepare(`PRAGMA table_info(${table})`).all())
   }
   for (const sql of [
     'SELECT * FROM settings ORDER BY key',
     'SELECT * FROM categories ORDER BY id',
-    'SELECT id,title,url,description,category_id,clicks,pinned,source_submission_id FROM bookmarks ORDER BY id',
+    'SELECT id,title,url,description,category_id,clicks,pinned,source_submission_id,created_by FROM bookmarks ORDER BY id',
+    'SELECT * FROM users ORDER BY id',
     'SELECT * FROM tags ORDER BY id',
     'SELECT * FROM bookmark_tags ORDER BY bookmark_id,tag_id',
     'SELECT * FROM submission_tags ORDER BY submission_id,tag_id',

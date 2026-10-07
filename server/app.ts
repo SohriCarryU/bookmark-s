@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import type { Database, Statement } from './db.js'
+import { hashPassword, verifyPassword } from './password.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -29,6 +30,7 @@ interface Bookmark {
   clicks: number
   pinned: boolean | number
   createdAt: string
+  createdBy: string | null
   tags: Tag[]
 }
 interface Tag { id: string; name: string }
@@ -36,15 +38,31 @@ interface TagInput { name: string; normalizedName: string }
 interface Submission extends Omit<Bookmark, 'clicks' | 'pinned'> {
   status: 'pending' | 'approved' | 'rejected'
 }
-type AppEnv = { Variables: { user: { username: string } | null } }
-const bookmarkFields = 'id, title, url, description, category_id AS categoryId, clicks, pinned, created_at AS createdAt'
-const submissionFields = 'id, title, url, description, category_id AS categoryId, status, created_at AS createdAt'
+export interface User {
+  id: string
+  username: string
+  role: 'admin' | 'user'
+  canAddBookmarks: boolean
+  isOwner: boolean
+}
+interface StoredUser extends Omit<User, 'canAddBookmarks' | 'isOwner'> {
+  canAddBookmarks: number
+  passwordHash: string
+  sessionVersion: number
+}
+type SiteMode = 'public' | 'private'
+type AppEnv = { Variables: { user: User | null; siteMode: SiteMode } }
+const userFields = 'id, username, role, can_add_bookmarks AS canAddBookmarks, password_hash AS passwordHash, session_version AS sessionVersion'
+const asUser = (user: StoredUser): User => ({ id: user.id, username: user.username, role: user.role, canAddBookmarks: user.role === 'admin' || Boolean(user.canAddBookmarks), isOwner: false })
+const bookmarkFields = 'id, title, url, description, category_id AS categoryId, clicks, pinned, created_at AS createdAt, created_by AS createdBy'
+const submissionFields = 'id, title, url, description, category_id AS categoryId, status, created_at AS createdAt, created_by AS createdBy'
 const categoryFields = 'id, name, icon, color, sort_order AS sortOrder'
 const COOKIE_NAME = 'bookmark_s_session'
 const SESSION_SECONDS = 60 * 60 * 24 * 7
 const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const decode = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0))
 const asBookmark = (bookmark: Bookmark) => ({ ...bookmark, pinned: Boolean(bookmark.pinned) })
+const usernameKey = (value: string) => value.normalize('NFKC').toLowerCase()
 
 class ApiError extends Error {
   constructor(message: string, public status: 400 | 401 | 403 | 404 | 409 | 429 = 400) { super(message) }
@@ -59,6 +77,16 @@ function stringField(value: unknown, label: string, max: number, required = true
   if (required && !trimmed) throw new ApiError(`请填写${label}`)
   if (trimmed.length > max) throw new ApiError(`${label}不能超过 ${max} 个字符`)
   return trimmed
+}
+
+function passwordField(value: unknown): string {
+  if (typeof value !== 'string' || value.length < 10 || value.length > 256) throw new ApiError('密码需要为 10–256 个字符')
+  return value
+}
+
+function roleField(value: unknown): User['role'] {
+  if (value !== 'admin' && value !== 'user') throw new ApiError('请选择管理员或用户权限')
+  return value
 }
 
 function tagName(value: unknown): TagInput {
@@ -129,6 +157,7 @@ export function createApp(db: Database, config: AppConfig) {
   const encoder = new TextEncoder()
   const signingKey = crypto.subtle.importKey('raw', encoder.encode(config.sessionSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
   const rateBuckets = new Map<string, { count: number; expires: number }>()
+  const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, isOwner: true }
 
   function rateLimit(c: Context, purpose: string, max: number, seconds: number) {
     const ip = config.clientIp?.(c) ?? c.req.header('cf-connecting-ip') ?? 'local'
@@ -158,13 +187,27 @@ export function createApp(db: Database, config: AppConfig) {
       const valid = await crypto.subtle.verify('HMAC', await signingKey, decode(signature), encoder.encode(payload))
       if (!valid) return null
       const session = JSON.parse(new TextDecoder().decode(decode(payload)))
-      if (session.username !== config.adminUsername || !Number.isFinite(session.expires) || session.expires <= Date.now()) return null
-      return { username: config.adminUsername }
+      if (!Number.isFinite(session.expires) || session.expires <= Date.now()) return null
+      // Keep existing environment-admin sessions valid through this upgrade.
+      if ((session.id === 'owner' || session.id === undefined) && session.username === config.adminUsername) return owner
+      if (typeof session.id !== 'string' || !Number.isInteger(session.version)) return null
+      const user = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE id = ?`, [session.id])
+      if (!user || user.sessionVersion !== session.version) return null
+      return asUser(user)
     } catch { return null }
   }
 
   async function requireAdmin(c: Context<AppEnv>, next: () => Promise<void>) {
-    if (!c.get('user')) throw new ApiError('请先登录管理员账户', 401)
+    const user = c.get('user')
+    if (!user) throw new ApiError('请先登录管理员账户', 401)
+    if (user.role !== 'admin') throw new ApiError('需要管理员权限', 403)
+    await next()
+  }
+
+  async function requireBookmarkCreator(c: Context<AppEnv>, next: () => Promise<void>) {
+    const user = c.get('user')
+    if (!user) throw new ApiError('请先登录账户', 401)
+    if (!user.canAddBookmarks) throw new ApiError('当前账户没有添加书签的权限', 403)
     await next()
   }
 
@@ -219,23 +262,39 @@ export function createApp(db: Database, config: AppConfig) {
       if (origin && origin !== expectedOrigin) throw new ApiError('请求来源不受信任，请刷新页面后重试', 403)
       if (c.req.header('sec-fetch-site') === 'cross-site') throw new ApiError('不允许跨站提交', 403)
     }
-    c.set('user', await getUser(c))
+    const user = await getUser(c)
+    const setting = await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'site_mode'")
+    const siteMode = setting?.value === 'private' ? 'private' : 'public'
+    c.set('user', user)
+    c.set('siteMode', siteMode)
+    // Only login, logout, health and an empty bootstrap remain public in private mode.
+    if (!user && siteMode === 'private' && !['/api/bootstrap', '/api/health', '/api/auth/login', '/api/auth/logout'].includes(c.req.path)) {
+      throw new ApiError('这是私人书签站，请先登录后查看', 401)
+    }
     await next()
   })
 
   app.get('/api/health', c => c.json({ ok: true }))
 
   app.get('/api/bootstrap', async c => {
+    const user = c.get('user')
+    const siteMode = c.get('siteMode')
+    if (siteMode === 'private' && !user) return c.json({
+      siteMode, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [],
+      stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
+    })
     const [categories, bookmarks, tags] = await Promise.all([
       db.all<Category>(`SELECT ${categoryFields} FROM categories ORDER BY sort_order, name`),
       db.all<Bookmark>(`SELECT ${bookmarkFields} FROM bookmarks ORDER BY pinned DESC, clicks DESC, created_at DESC, id`),
-      listTags(Boolean(c.get('user'))),
+      listTags(user?.role === 'admin'),
     ])
     return c.json({
       categories,
       bookmarks: (await withTags(bookmarks, 'bookmark')).map(asBookmark),
       tags,
-      user: c.get('user'),
+      user,
+      siteMode,
+      canViewContent: true,
       stats: { totalBookmarks: bookmarks.length, totalClicks: bookmarks.reduce((sum, bookmark) => sum + bookmark.clicks, 0), totalCategories: categories.length },
     })
   })
@@ -245,27 +304,91 @@ export function createApp(db: Database, config: AppConfig) {
     const body = await readBody(c)
     const username = stringField(body.username, '用户名', 100)
     if (typeof body.password !== 'string' || body.password.length > 256) throw new ApiError('用户名或密码不正确', 401)
-    const [suppliedHash, expectedHash] = await Promise.all([
-      crypto.subtle.digest('SHA-256', encoder.encode(body.password)),
-      crypto.subtle.digest('SHA-256', encoder.encode(config.adminPassword)),
-    ])
-    const left = new Uint8Array(suppliedHash)
-    const right = new Uint8Array(expectedHash)
-    let difference = 0
-    for (let index = 0; index < left.length; index++) difference |= left[index] ^ right[index]
-    if (username !== config.adminUsername || difference !== 0) throw new ApiError('用户名或密码不正确', 401)
-    const payload = encode(encoder.encode(JSON.stringify({ username, expires: Date.now() + SESSION_SECONDS * 1000 })))
+    let user: User
+    let version: number | undefined
+    if (usernameKey(username) === usernameKey(config.adminUsername)) {
+      const [suppliedHash, expectedHash] = await Promise.all([
+        crypto.subtle.digest('SHA-256', encoder.encode(body.password)),
+        crypto.subtle.digest('SHA-256', encoder.encode(config.adminPassword)),
+      ])
+      const left = new Uint8Array(suppliedHash)
+      const right = new Uint8Array(expectedHash)
+      let difference = 0
+      for (let index = 0; index < left.length; index++) difference |= left[index] ^ right[index]
+      if (difference !== 0) throw new ApiError('用户名或密码不正确', 401)
+      user = owner
+    } else {
+      const stored = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE username_key = ?`, [usernameKey(username)])
+      if (!await verifyPassword(body.password, stored?.passwordHash) || !stored) throw new ApiError('用户名或密码不正确', 401)
+      user = asUser(stored)
+      version = stored.sessionVersion
+    }
+    const payload = encode(encoder.encode(JSON.stringify({ id: user.id, username: user.username, version, expires: Date.now() + SESSION_SECONDS * 1000 })))
     const signature = encode(new Uint8Array(await crypto.subtle.sign('HMAC', await signingKey, encoder.encode(payload))))
     setCookie(c, COOKIE_NAME, `${payload}.${signature}`, {
       httpOnly: true, secure: config.secureCookies ?? new URL(c.req.url).protocol === 'https:',
       sameSite: 'Lax', path: '/', maxAge: SESSION_SECONDS,
     })
-    return c.json({ user: { username } })
+    return c.json({ user })
   })
 
   app.post('/api/auth/logout', c => {
     deleteCookie(c, COOKIE_NAME, { path: '/', secure: config.secureCookies ?? new URL(c.req.url).protocol === 'https:', sameSite: 'Lax' })
     return c.json({ ok: true })
+  })
+
+  app.get('/api/settings', requireAdmin, c => c.json({ siteMode: c.get('siteMode') }))
+
+  app.patch('/api/settings', requireAdmin, async c => {
+    const body = await readBody(c)
+    if (Object.keys(body).some(key => key !== 'siteMode') || !['public', 'private'].includes(body.siteMode as string)) {
+      throw new ApiError('请选择公开或私人模式')
+    }
+    await db.run("INSERT INTO settings (key,value) VALUES ('site_mode',?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [body.siteMode])
+    return c.json({ siteMode: body.siteMode })
+  })
+
+  app.get('/api/users', requireAdmin, async c => {
+    const users = await db.all<StoredUser>(`SELECT ${userFields} FROM users ORDER BY created_at, username_key, id`)
+    return c.json({ users: [owner, ...users.map(asUser)] })
+  })
+
+  app.post('/api/users', requireAdmin, async c => {
+    const body = await readBody(c)
+    if (Object.keys(body).some(key => !['username', 'password', 'role', 'canAddBookmarks'].includes(key))) throw new ApiError('用户字段格式不正确')
+    const username = stringField(body.username, '用户名', 40).normalize('NFKC')
+    if (username.length > 40 || !/^[\p{L}\p{N}_.-]+$/u.test(username)) throw new ApiError('用户名仅支持字母、数字、中文、下划线、点和短横线，最多 40 个字符')
+    const key = usernameKey(username)
+    if (key === usernameKey(config.adminUsername) || await db.get('SELECT id FROM users WHERE username_key = ?', [key])) {
+      throw new ApiError('这个用户名已经存在', 409)
+    }
+    const password = passwordField(body.password)
+    const role = body.role === undefined ? 'user' : roleField(body.role)
+    if (body.canAddBookmarks !== undefined && typeof body.canAddBookmarks !== 'boolean') throw new ApiError('添加书签权限格式不正确')
+    const canAddBookmarks = role === 'admin' || body.canAddBookmarks === true
+    const id = crypto.randomUUID()
+    const passwordHash = await hashPassword(password)
+    await db.run('INSERT INTO users (id,username,username_key,password_hash,role,can_add_bookmarks) VALUES (?,?,?,?,?,?)', [id, username, key, passwordHash, role, canAddBookmarks ? 1 : 0])
+    return c.json({ user: { id, username, role, canAddBookmarks, isOwner: false } }, 201)
+  })
+
+  app.patch('/api/users/:id', requireAdmin, async c => {
+    const id = c.req.param('id')!
+    if (id === owner.id) throw new ApiError('内置管理员由服务器配置管理，不能在此修改', 403)
+    const existing = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE id = ?`, [id])
+    if (!existing) throw new ApiError('这个用户不存在', 404)
+    const body = await readBody(c)
+    if (!Object.keys(body).length || Object.keys(body).some(key => !['role', 'canAddBookmarks', 'password'].includes(key))) throw new ApiError('没有可更新的用户字段')
+    const role = body.role === undefined ? existing.role : roleField(body.role)
+    if ('canAddBookmarks' in body && typeof body.canAddBookmarks !== 'boolean') throw new ApiError('添加书签权限格式不正确')
+    const canAddBookmarks = role === 'admin' || (body.canAddBookmarks === undefined
+      ? existing.role === 'user' && Boolean(existing.canAddBookmarks)
+      : body.canAddBookmarks)
+    const passwordHash = 'password' in body ? await hashPassword(passwordField(body.password)) : existing.passwordHash
+    // Resetting a password invalidates old cookies; role/permission changes are read on every request.
+    await db.run('UPDATE users SET role = ?, can_add_bookmarks = ?, password_hash = ?, session_version = session_version + ? WHERE id = ?',
+      [role, canAddBookmarks ? 1 : 0, passwordHash, 'password' in body ? 1 : 0, id])
+    return c.json({ user: { id, username: existing.username, role, canAddBookmarks, isOwner: false } })
   })
 
   app.post('/api/bookmarks/:id/click', async c => {
@@ -275,14 +398,14 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json(result)
   })
 
-  app.post('/api/bookmarks', requireAdmin, async c => {
+  app.post('/api/bookmarks', requireBookmarkCreator, async c => {
     const body = await readBody(c)
     const { title, url, description, categoryId } = await validateBookmark(body)
     const tags = tagInputs(body.tags)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [url])) throw new ApiError('这个网站已经在书签里了', 409)
     const id = crypto.randomUUID()
     await db.batch([
-      { sql: 'INSERT INTO bookmarks (id,title,url,description,category_id) VALUES (?,?,?,?,?)', params: [id, title, url, description, categoryId] },
+      { sql: 'INSERT INTO bookmarks (id,title,url,description,category_id,created_by) VALUES (?,?,?,?,?,?)', params: [id, title, url, description, categoryId, c.get('user')!.username] },
       ...createTagStatements(tags), assignTagStatement('bookmark', [id], tags),
     ])
     return c.json({ bookmark: await findBookmark(id) }, 201)
@@ -395,7 +518,7 @@ export function createApp(db: Database, config: AppConfig) {
     if (await db.get("SELECT id FROM submissions WHERE url = ? AND status = 'pending'", [url])) throw new ApiError('这个网站已经在审核队列里啦', 409)
     const id = crypto.randomUUID()
     await db.batch([
-      { sql: 'INSERT INTO submissions (id,title,url,description,category_id) VALUES (?,?,?,?,?)', params: [id, title, url, description, categoryId] },
+      { sql: 'INSERT INTO submissions (id,title,url,description,category_id,created_by) VALUES (?,?,?,?,?,?)', params: [id, title, url, description, categoryId, c.get('user')?.username ?? null] },
       ...createTagStatements(tags), assignTagStatement('submission', [id], tags),
     ])
     const submission = await db.get<Submission>(`SELECT ${submissionFields} FROM submissions WHERE id = ?`, [id])
@@ -409,7 +532,7 @@ export function createApp(db: Database, config: AppConfig) {
     if (submission.status !== 'pending') throw new ApiError('这条推荐已经处理过了', 409)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [submission.url])) throw new ApiError('这个网站已经被收录，可以忽略这条推荐', 409)
     await db.batch([
-      { sql: "INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id) SELECT ?,title,url,description,category_id,id FROM submissions WHERE id = ? AND status = 'pending'", params: [crypto.randomUUID(), id] },
+      { sql: "INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id,created_by) SELECT ?,title,url,description,category_id,id,created_by FROM submissions WHERE id = ? AND status = 'pending'", params: [crypto.randomUUID(), id] },
       { sql: `INSERT OR IGNORE INTO bookmark_tags (bookmark_id,tag_id)
         SELECT bookmarks.id, submission_tags.tag_id FROM bookmarks JOIN submission_tags
           ON submission_tags.submission_id = bookmarks.source_submission_id

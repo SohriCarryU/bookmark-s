@@ -17,8 +17,15 @@ export type Bookmark = {
   clicks: number;
   pinned: boolean;
   createdAt: string;
+  createdBy: string | null;
 };
-export type User = { username: string };
+export type User = {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+  canAddBookmarks: boolean;
+  isOwner: boolean;
+};
 export type Submission = {
   id: string;
   title: string;
@@ -28,12 +35,15 @@ export type Submission = {
   tags: Tag[];
   status: "pending" | "approved" | "rejected";
   createdAt: string;
+  createdBy: string | null;
 };
 export type Bootstrap = {
   categories: Category[];
   tags: TagCount[];
   bookmarks: Bookmark[];
   user: User | null;
+  siteMode: "public" | "private";
+  canViewContent: boolean;
   stats: {
     totalBookmarks: number;
     totalClicks: number;

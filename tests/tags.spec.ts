@@ -72,7 +72,7 @@ test('visitors combine folders and tags with AND/OR, remove chips, find untagged
   await createBookmark('E2E Dual Gamma', ['E2E Blue'], 'design');
   await createBookmark('E2E Dual Delta', []);
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '管理员登录' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   await expect(page.locator('.sidebar .window-controls')).toHaveCount(0);
   await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Dual');
   await expectTitles(page, ['E2E Dual Alpha', 'E2E Dual Beta', 'E2E Dual Gamma', 'E2E Dual Delta']);
@@ -265,22 +265,59 @@ test('tag manager creates, renames and deletes tags without deleting the bookmar
   expect(data.tags.some(tag => tag.name === 'E2E Renamed')).toBe(false);
 });
 
-test('600 bookmarks render progressively while keyword and tag filters search the entire collection', async ({ page }) => {
+test('600 bookmarks use numbered pages and page sizes while filters search the entire collection', async ({ page, context }) => {
   test.setTimeout(120_000);
   const fixtures: Bookmark[] = [];
   for (let index = 0; index < 600; index++) {
     fixtures.push(await createBookmark(`E2E Scale ${String(index).padStart(3, '0')}`, []));
   }
+  await loginBrowser(context);
   await page.goto('/');
   await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Scale');
   await expect(page.locator('.filter-result')).toHaveText('找到 600 个网站');
-  await expect(page.locator('.bookmark-card')).toHaveCount(36);
-  await page.getByRole('button', { name: '再显示 36 个', exact: true }).click();
-  await expect(page.locator('.bookmark-card')).toHaveCount(72);
+  const pagination = page.getByRole('navigation', { name: '书签分页' });
+  const pageSize = page.getByRole('combobox', { name: '每页显示' });
+  await expect(pageSize).toHaveValue('20');
+  await expect(page.locator('.bookmark-card')).toHaveCount(20);
+  await expect(page.getByRole('button', { name: /再显示/ })).toHaveCount(0);
+  await expect(pagination.getByRole('button', { name: '上一页', exact: true })).toBeDisabled();
+  const firstPageTitles = await page.locator('.bookmark-card h3').allTextContents();
+  await pagination.getByRole('button', { name: '第 2 页', exact: true }).click();
+  await expect(page.locator('.bookmark-card')).toHaveCount(20);
+  await expect(pagination.getByRole('button', { name: '第 2 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  expect((await page.locator('.bookmark-card h3').allTextContents()).some(title => firstPageTitles.includes(title))).toBe(false);
+  await pageSize.selectOption('50');
+  await expect(page.locator('.bookmark-card')).toHaveCount(50);
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await pagination.getByRole('button', { name: '下一页', exact: true }).click();
+  await pageSize.selectOption('100');
+  await expect(page.locator('.bookmark-card')).toHaveCount(100);
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await pagination.getByRole('button', { name: '第 6 页', exact: true }).click();
+  await expect(page.locator('.bookmark-card')).toHaveCount(100);
+  await expect(pagination.getByRole('button', { name: '下一页', exact: true })).toBeDisabled();
+  // Sorting returns to the first page, and selections cannot carry across pages.
+  await page.getByRole('button', { name: '最近添加', exact: true }).click();
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('button', { name: '批量整理', exact: true }).click();
+  await page.getByRole('checkbox', { name: '选择当前显示的书签', exact: true }).check();
+  await expect(page.locator('.batch-selected-count')).toHaveText('已选 100/200');
+  await expect(page.locator('.bookmark-card input[type="checkbox"]:checked')).toHaveCount(100);
+  await expect(page.locator('.batch-toolbar').getByRole('button', { name: '添加标签', exact: true })).toBeEnabled();
+  await pagination.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.locator('.batch-selected-count')).toHaveText('已选 0/200');
+  await expect(page.locator('.batch-toolbar').getByRole('button', { name: '添加标签', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '完成整理', exact: true }).click();
   const shownTitles = await page.locator('.bookmark-card h3').allTextContents();
-  const hidden = fixtures.find(bookmark => !shownTitles.includes(bookmark.title))!;
+  // Encoded spaces end in "20", so low numeric terms can also match fixture URLs.
+  const hidden = fixtures.slice(300).find(bookmark => !shownTitles.includes(bookmark.title))!;
   await page.getByRole('textbox', { name: '搜索书签' }).fill(hidden.title);
   await expectTitles(page, [hidden.title]);
+  await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Scale');
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
+  await pagination.getByRole('button', { name: '下一页', exact: true }).click();
+  await page.getByRole('navigation', { name: '书签文件夹' }).getByRole('button', { name: /开发工具/ }).click();
+  await expect(pagination.getByRole('button', { name: '第 1 页', exact: true })).toHaveAttribute('aria-current', 'page');
   expect((await admin.patch(`/api/bookmarks/${hidden.id}`, { data: { tags: ['E2E Deep Search'] } })).ok()).toBeTruthy();
   await page.reload();
   await page.getByRole('textbox', { name: '搜索书签' }).fill('E2E Deep Search');
