@@ -10,7 +10,7 @@ export default function FavoriteButton({ title, favorited, busy, disabled, onCli
 }) {
   return <button
     type="button"
-    className={`favorite-toggle${favorited ? " is-favorite" : ""}`}
+    className={`icon-button favorite-toggle${favorited ? " pin-active" : ""}`}
     aria-label={favorited ? `取消收藏 ${title}` : `收藏 ${title} 到个人书签`}
     title={favorited ? "取消个人收藏" : "收藏到个人书签"}
     aria-pressed={favorited}
@@ -18,6 +18,6 @@ export default function FavoriteButton({ title, favorited, busy, disabled, onCli
     disabled={busy || disabled}
     onClick={onClick}
   >
-    {busy ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <Star size={18} fill={favorited ? "currentColor" : "none"} aria-hidden="true" />}
+    {busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Star size={14} fill={favorited ? "currentColor" : "none"} aria-hidden="true" />}
   </button>;
 }

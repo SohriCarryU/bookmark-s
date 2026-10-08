@@ -19,6 +19,22 @@ function deferred() {
 async function rendered(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
+async function expectCardActions(page: Page, title: string, state: { pinned?: boolean; favorited?: boolean } = {}) {
+  const actions = star(page, title, state.favorited).locator('..').getByRole('button');
+  await expect(actions).toHaveCount(4);
+  expect(await actions.evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual([
+    `${state.pinned ? '取消置顶' : '置顶'} ${title}`,
+    state.favorited ? `取消收藏 ${title}` : `收藏 ${title} 到个人书签`,
+    `编辑 ${title}`,
+    `删除 ${title}`,
+  ]);
+  const sizes = await actions.evaluateAll(buttons => buttons.map(button => {
+    const rect = button.getBoundingClientRect();
+    const icon = button.querySelector('svg')!.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, iconWidth: icon.width, iconHeight: icon.height };
+  }));
+  for (const size of sizes.slice(1)) expect(size).toEqual(sizes[0]);
+}
 
 test.describe('persisted personal favorites', () => {
   let admin: APIRequestContext;
@@ -139,6 +155,7 @@ test.describe('persisted personal favorites', () => {
     const beta = await createBookmark('E2E Favorite Manage Beta');
     await context.addCookies(fixtureCookies(baseURL, user));
     await page.goto('/?source=favorite-history');
+    await expectCardActions(page, alpha.title);
     await star(page, alpha.title).click();
     await expect(star(page, alpha.title, true)).toHaveAttribute('aria-pressed', 'true');
     await star(page, beta.title).click();
@@ -176,9 +193,7 @@ test.describe('persisted personal favorites', () => {
     await page.setViewportSize({ width: 320, height: 844 });
     const target = star(page, alpha.title, true);
     await target.scrollIntoViewIfNeeded();
-    const size = await target.boundingBox();
-    expect(size!.width).toBeGreaterThanOrEqual(44);
-    expect(size!.height).toBeGreaterThanOrEqual(44);
+    await expectCardActions(page, alpha.title, { pinned: true, favorited: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
     await target.click();
     await expect(page.getByRole('heading', { name: '没有匹配的个人书签', exact: true })).toBeVisible();

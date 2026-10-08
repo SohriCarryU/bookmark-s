@@ -55,6 +55,7 @@ import PersonalizationPage from "./PersonalizationPage";
 import OperationsPage from "./OperationsPage";
 import BookmarkAuthors from "./BookmarkAuthors";
 import FavoriteButton from "./FavoriteButton";
+import SiteIcon from "./SiteIcon";
 import { CategoryIcon } from "./folderIcons";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
 import useNavigation, { availableNavigation, type NavigationState } from "./useNavigation";
@@ -84,41 +85,6 @@ function domain(url: string) {
     return url;
   }
 }
-function siteColor(bookmark: Bookmark) {
-  return ["sage", "blue", "peach", "lavender", "rose", "yellow"][
-    Array.from(bookmark.title).reduce(
-      (sum, char) => sum + char.charCodeAt(0),
-      0,
-    ) % 6
-  ];
-}
-function SiteIcon({
-  bookmark,
-  large = false,
-}: {
-  bookmark: Bookmark;
-  large?: boolean;
-}) {
-  const title = bookmark.title.toLowerCase();
-  const known = title.includes("github")
-    ? "gh"
-    : title.includes("figma")
-      ? "Fi"
-      : title.includes("notion")
-        ? "N"
-        : title.includes("chatgpt")
-          ? "✳"
-          : bookmark.title.slice(0, 1).toUpperCase();
-  return (
-    <span
-      aria-hidden="true"
-      className={`site-icon site-${siteColor(bookmark)}${large ? " site-icon-large" : ""}`}
-    >
-      {known}
-    </span>
-  );
-}
-
 export default function App() {
   const [data, setData] = useState<Bootstrap | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1329,7 +1295,7 @@ export default function App() {
                               />
                             </label>
                           )}
-                          <SiteIcon bookmark={bookmark} />
+                          <SiteIcon bookmark={bookmark} allowFallback={data?.siteMode === "public"} />
                           <div className="card-top-right">
                             {pinned && (
                               <span className="pin-badge">
@@ -1337,17 +1303,9 @@ export default function App() {
                                 置顶
                               </span>
                             )}
-                            {data?.user && <div className="card-actions">
-                              <FavoriteButton
-                                title={bookmark.title}
-                                favorited={favoriteIds.has(bookmark.id)}
-                                busy={pendingFavoriteIds.includes(bookmark.id)}
-                                disabled={sessionChanging}
-                                onClick={() => void toggleFavorite(bookmark)}
-                              />
-                            {canPinBookmarks && (
+                            {data?.user && (
                               <div className="card-menu">
-                                <button
+                                {canPinBookmarks && <button
                                   className={`icon-button${pinned ? " pin-active" : ""}`}
                                   title={
                                     pinned ? "取消置顶" : "置顶书签"
@@ -1357,7 +1315,14 @@ export default function App() {
                                   onClick={() => void togglePin(bookmark)}
                                 >
                                   <Pin size={14} />
-                                </button>
+                                </button>}
+                                <FavoriteButton
+                                  title={bookmark.title}
+                                  favorited={favoriteIds.has(bookmark.id)}
+                                  busy={pendingFavoriteIds.includes(bookmark.id)}
+                                  disabled={sessionChanging}
+                                  onClick={() => void toggleFavorite(bookmark)}
+                                />
                                 {isAdmin && <><button
                                   className="icon-button"
                                   title="编辑书签"
@@ -1380,7 +1345,6 @@ export default function App() {
                                 </button></>}
                               </div>
                             )}
-                            </div>}
                           </div>
                         </div>
                         <a
@@ -1634,7 +1598,7 @@ export default function App() {
         >
           <div className="modal-body">
             <div className="delete-preview">
-              <SiteIcon bookmark={modal.bookmark} />
+              <SiteIcon bookmark={modal.bookmark} allowFallback={data?.siteMode === "public"} />
               <div>
                 <strong>{modal.bookmark.title}</strong>
                 <p>{domain(modal.bookmark.url)}</p>

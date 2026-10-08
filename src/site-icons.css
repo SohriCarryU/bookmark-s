@@ -1,0 +1,3 @@
+.site-icon { position: relative; overflow: hidden; }
+.site-icon .site-icon-image { position: absolute; inset: 0; margin: auto; width: 70%; height: 70%; object-fit: contain; opacity: 0; }
+.site-icon .site-icon-image.is-loaded { opacity: 1; }

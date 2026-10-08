@@ -1,11 +1,4 @@
-.card-actions { display: flex; align-items: center; gap: 7px; }
-.favorite-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 36px; height: 36px; padding: 8px; border: 1px solid #dbe3d5; border-radius: 9px; background: #fbfcf9; color: var(--text-secondary); transition: background .18s, border-color .18s; }
-.favorite-toggle:hover { border-color: #afbf9f; background: #edf3e7; }
-.favorite-toggle.is-favorite { border-color: #d4b96c; background: #fff3ce; color: #755014; }
-.favorite-toggle.is-favorite:hover { border-color: #b38d36; background: #f9e6af; }
-.favorite-toggle:focus-visible { outline: 2px solid #527b40; outline-offset: 3px; }
-.favorite-toggle:disabled { opacity: .7; }
 .favorites-empty-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
-@media (max-width: 700px), (pointer: coarse) {
-  .favorite-toggle { width: 44px; height: 44px; padding: 12px; }
+@media (max-width: 700px) {
+  .bookmark-card:has(.card-menu > .favorite-toggle:only-child) .pin-badge { display: inline-flex; }
 }
