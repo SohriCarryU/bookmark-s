@@ -38,6 +38,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Star,
   Trash2,
   Users,
   SlidersHorizontal,
@@ -53,8 +54,11 @@ import UsersPage from "./UsersPage";
 import PersonalizationPage from "./PersonalizationPage";
 import OperationsPage from "./OperationsPage";
 import BookmarkAuthors from "./BookmarkAuthors";
+import FavoriteButton from "./FavoriteButton";
 import { CategoryIcon } from "./folderIcons";
 import { BatchTagsModal, ManageTagsModal } from "./TagModals";
+import useNavigation, { availableNavigation, type NavigationState } from "./useNavigation";
+import useFavorites from "./useFavorites";
 import type { Bookmark, Bootstrap, Category, Submission } from "./types";
 
 type ModalState =
@@ -119,24 +123,21 @@ export default function App() {
   const [data, setData] = useState<Bootstrap | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [query, setQuery] = useState("");
-  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-  const [tagMatchMode, setTagMatchMode] = useState<"all" | "any">("all");
-  const [untagged, setUntagged] = useState(false);
-  const [pageSize, setPageSize] = useState(50);
-  const [page, setPage] = useState(1);
+  const { navigation: requestedNavigation, navigate, historyVersion } = useNavigation();
+  const navigation = useMemo(() => availableNavigation(requestedNavigation, data), [requestedNavigation, data]);
+  const { filter, query, selectedTagIds, tagMatchMode, untagged, pageSize, page, view, sort } = navigation;
   const [jumpPage, setJumpPage] = useState("");
   const [jumpError, setJumpError] = useState("");
-  const [view, setView] = useState<"bookmarks" | "settings" | "users" | "personalization" | "operations">("bookmarks");
   const [batchMode, setBatchMode] = useState(false);
   const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<string[]>([]);
-  const [sort, setSort] = useState<"popular" | "recent">("popular");
   const [modal, setModal] = useState<ModalState>(null);
   const [toast, setToast] = useState<{
     message: string;
     error?: boolean;
   } | null>(null);
+  const { favoriteIds, pendingIds: pendingFavoriteIds, revision: favoriteRevision, acceptBootstrap, resetFavorites, toggleFavorite } = useFavorites(data, setData, (message, error) => setToast({ message, error }));
+  const [sessionChanging, setSessionChanging] = useState(false);
+  const sessionChangingRef = useRef(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(
     () => window.matchMedia("(max-width: 700px)").matches,
@@ -221,31 +222,30 @@ export default function App() {
   }, [drawerActive]);
 
   const load = useCallback(async () => {
+    if (sessionChangingRef.current) return;
     const request = ++bootstrapRequest.current;
+    const requestedFavoriteRevision = favoriteRevision.current;
     setLoading(true);
     setLoadError("");
     try {
       const next = await api<Bootstrap>("/bootstrap");
-      if (request === bootstrapRequest.current) setData(next);
+      if (request === bootstrapRequest.current) acceptBootstrap(next, requestedFavoriteRevision);
     } catch (error) {
       if (request === bootstrapRequest.current) setLoadError(messageOf(error));
     } finally {
       if (request === bootstrapRequest.current) setLoading(false);
     }
-  }, []);
-  const refreshData = useCallback(async () => {
+  }, [acceptBootstrap, favoriteRevision]);
+  const refreshData = useCallback(async (duringSessionChange = false) => {
+    if (sessionChangingRef.current && !duringSessionChange) return;
     const request = ++bootstrapRequest.current;
+    const requestedFavoriteRevision = favoriteRevision.current;
     const next = await api<Bootstrap>("/bootstrap");
     if (request !== bootstrapRequest.current) return;
-    setData(next);
+    acceptBootstrap(next, requestedFavoriteRevision);
     setLoading(false);
     setLoadError("");
-    setFilter((current) => current === "all" || current === "pinned" || next.categories.some((item) => item.id === current) ? current : "all");
-    setSelectedTagIds((current) => {
-      const remaining = current.filter((id) => next.tags.some((tag) => tag.id === id));
-      return remaining.length === current.length ? current : remaining;
-    });
-  }, []);
+  }, [acceptBootstrap, favoriteRevision]);
   useEffect(() => {
     if (!hasLoadedData) return;
     const refreshAccess = () => { void refreshData().catch(() => {}); };
@@ -266,21 +266,20 @@ export default function App() {
     });
   }, [canViewContent, canAddBookmarks, isAdmin]);
   useEffect(() => {
-    setPage(1);
     setJumpPage("");
     setJumpError("");
     setSelectedBookmarkIds([]);
-  }, [filter, query, selectedTagIds, tagMatchMode, untagged, sort, pageSize]);
+  }, [requestedNavigation]);
+  useEffect(() => {
+    setModal(null);
+    setMobileOpen(false);
+  }, [historyVersion]);
   useEffect(() => {
     if (!isAdmin) {
-      setView((current) => current === "settings" || current === "users" || current === "operations" ? "bookmarks" : current);
       setBatchMode(false);
       setSelectedBookmarkIds([]);
     }
   }, [isAdmin]);
-  useEffect(() => {
-    if (!data?.user) setView((current) => current === "personalization" ? "bookmarks" : current);
-  }, [data?.user]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -332,7 +331,7 @@ export default function App() {
   const isPinnedHere = useCallback((bookmark: Bookmark) => category
     ? (bookmark.pinnedCategoryIds ?? (bookmark.pinned ? [bookmark.categoryId] : [])).includes(category.id)
     : bookmark.pinned, [category]);
-  const pinnedCount = bookmarks.filter((bookmark) => bookmark.pinned).length;
+  const favoriteCount = bookmarks.filter((bookmark) => favoriteIds.has(bookmark.id)).length;
   const pendingCount = submissions.filter(
     (item) => item.status === "pending",
   ).length;
@@ -343,10 +342,10 @@ export default function App() {
   const folderAndSearchMatches = useMemo(() => {
     const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
     return bookmarks.filter((bookmark) => {
-      if (filter === "pinned" && !bookmark.pinned) return false;
+      if (filter === "favorites" && !favoriteIds.has(bookmark.id)) return false;
       if (
         filter !== "all" &&
-        filter !== "pinned" &&
+        filter !== "favorites" &&
         !(bookmark.categoryIds ?? [bookmark.categoryId]).includes(filter)
       )
         return false;
@@ -356,7 +355,7 @@ export default function App() {
         `${bookmark.title} ${bookmark.description} ${bookmark.url} ${categoryName} ${bookmark.createdBy ? `@${bookmark.createdBy}` : ""} ${(bookmark.editedBy ?? []).map((name) => `@${name}`).join(" ")} ${bookmark.tags.map((tag) => tag.name).join(" ")}`.toLocaleLowerCase();
       return terms.every((term) => text.includes(term));
     });
-  }, [bookmarks, categories, filter, query]);
+  }, [bookmarks, categories, filter, query, favoriteIds]);
   const visible = useMemo(() => {
     return folderAndSearchMatches
       .filter((bookmark) => {
@@ -410,13 +409,17 @@ export default function App() {
   const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
     .filter((value) => value === 1 || value === pageCount || Math.abs(value - currentPage) <= 1);
   useEffect(() => {
-    setPage((current) => Math.min(current, pageCount));
-  }, [pageCount]);
+    // Validate filters and pagination only once the collection is accessible.
+    // A correction for an older render must not replace a newer user navigation.
+    navigate((current) => current === requestedNavigation
+      ? { ...navigation, page: canViewContent ? currentPage : navigation.page }
+      : current, "replace");
+  }, [requestedNavigation, navigation, canViewContent, currentPage, navigate]);
   useEffect(() => {
     setSelectedBookmarkIds([]);
   }, [currentPage]);
   function changePage(value: number) {
-    setPage(Math.max(1, Math.min(value, pageCount)));
+    navigate({ page: Math.max(1, Math.min(value, pageCount)) });
     setJumpPage("");
     setJumpError("");
     setSelectedBookmarkIds([]);
@@ -434,20 +437,17 @@ export default function App() {
   const hasFilters =
     filter !== "all" || !!query.trim() || selectedTagIds.length > 0 || untagged;
   function resetFilters() {
-    setView("bookmarks");
-    setFilter("all");
-    setQuery("");
-    setSelectedTagIds([]);
-    setUntagged(false);
-    setTagMatchMode("all");
+    navigate({ view: "bookmarks", filter: "all", query: "", selectedTagIds: [], untagged: false, tagMatchMode: "all", sort: "popular", page: 1 });
   }
   function toggleTag(id: string) {
-    setUntagged(false);
-    setSelectedTagIds((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id],
-    );
+    navigate((current) => ({ ...current, untagged: false, page: 1,
+      selectedTagIds: current.selectedTagIds.includes(id)
+        ? current.selectedTagIds.filter((item) => item !== id)
+        : [...current.selectedTagIds, id],
+    }));
+  }
+  function changeSearch(value: string) {
+    navigate({ query: value, page: 1 }, "replace");
   }
   function toggleSelection(id: string) {
     if (
@@ -603,37 +603,50 @@ export default function App() {
   }
   function clearSession() {
       ++bootstrapRequest.current;
+      resetFavorites(null);
       setData((current) => current ? {
-        ...current, user: null,
+        ...current, user: null, favoriteBookmarkIds: [],
         ...(current.siteMode === "private" ? {
           canViewContent: false, bookmarks: [], categories: [], tags: [],
           stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
         } : {}),
       } : current);
-      setView("bookmarks");
+      navigate({ view: "bookmarks" }, "replace");
       setModal(null);
   }
   async function logout() {
+    if (sessionChangingRef.current) return;
+    sessionChangingRef.current = true;
+    setSessionChanging(true);
     try {
-      ++bootstrapRequest.current;
-      await api("/auth/logout", { method: "POST" });
+      const request = api("/auth/logout", { method: "POST" });
+      // Remove private state immediately, even when the logout request is slow.
       clearSession();
-      await refreshData();
+      await request;
+      await refreshData(true);
       setToast({ message: "已退出登录" });
     } catch (error) {
       setToast({ message: messageOf(error), error: true });
+      await refreshData(true).catch(() => {});
+    } finally {
+      sessionChangingRef.current = false;
+      setSessionChanging(false);
     }
   }
   function selectFilter(value: string) {
-    setView("bookmarks");
-    setFilter(value);
+    navigate((current) => ({ ...current, view: "bookmarks", filter: value, page: current.filter === value ? current.page : 1 }));
     setMobileOpen(false);
+  }
+  function selectView(value: NavigationState["view"]) {
+    navigate({ view: value });
+    setMobileOpen(false);
+    window.scrollTo(0, 0);
   }
   const collectionTitle =
     query.trim() || selectedTagIds.length > 0 || untagged
       ? "筛选结果"
-      : filter === "pinned"
-        ? "置顶收藏"
+      : filter === "favorites"
+        ? "个人书签"
         : (category?.name ?? "发现好网站");
 
   return (
@@ -695,17 +708,17 @@ export default function App() {
                 <span>全部书签</span>
                 <span className="nav-count">{bookmarks.length}</span>
               </button>
-              <button
-                className={`nav-item${view === "bookmarks" && filter === "pinned" ? " active" : ""}`}
-                onClick={() => selectFilter("pinned")}
-                aria-current={view === "bookmarks" && filter === "pinned" ? "page" : undefined}
+              {data?.user && <button
+                className={`nav-item${view === "bookmarks" && filter === "favorites" ? " active" : ""}`}
+                onClick={() => selectFilter("favorites")}
+                aria-current={view === "bookmarks" && filter === "favorites" ? "page" : undefined}
               >
                 <span className="nav-icon">
-                  <Pin size={18} />
+                  <Star size={18} />
                 </span>
-                <span>置顶收藏</span>
-                <span className="nav-count">{pinnedCount}</span>
-              </button>
+                <span>个人书签</span>
+                <span className="nav-count">{favoriteCount}</span>
+              </button>}
             </nav>
             <div className="sidebar-divider" />
             <p className="sidebar-section-label">
@@ -769,7 +782,7 @@ export default function App() {
               <button
                 className={`nav-item settings-nav${view === "operations" ? " active" : ""}`}
                 aria-current={view === "operations" ? "page" : undefined}
-                onClick={() => { setView("operations"); setMobileOpen(false); window.scrollTo(0, 0); }}
+                onClick={() => selectView("operations")}
               >
                 <span className="nav-icon"><History size={18} /></span>
                 <span>操作记录</span>
@@ -779,7 +792,7 @@ export default function App() {
               <button
                 className={`nav-item settings-nav${view === "users" ? " active" : ""}`}
                 aria-current={view === "users" ? "page" : undefined}
-                onClick={() => { setView("users"); setMobileOpen(false); window.scrollTo(0, 0); }}
+                onClick={() => selectView("users")}
               >
                 <span className="nav-icon"><Users size={18} /></span>
                 <span>用户管理</span>
@@ -789,7 +802,7 @@ export default function App() {
               <button
                 className={`nav-item settings-nav${view === "settings" ? " active" : ""}`}
                 aria-current={view === "settings" ? "page" : undefined}
-                onClick={() => { setView("settings"); setMobileOpen(false); window.scrollTo(0, 0); }}
+                onClick={() => selectView("settings")}
               >
                 <span className="nav-icon"><Settings size={18} /></span>
                 <span>站点配置</span>
@@ -799,7 +812,7 @@ export default function App() {
               <button
                 className={`nav-item settings-nav${view === "personalization" ? " active" : ""}`}
                 aria-current={view === "personalization" ? "page" : undefined}
-                onClick={() => { setView("personalization"); setMobileOpen(false); window.scrollTo(0, 0); }}
+                onClick={() => selectView("personalization")}
               >
                 <span className="nav-icon"><SlidersHorizontal size={18} /></span>
                 <span>个性化配置</span>
@@ -845,8 +858,8 @@ export default function App() {
               <span>我的收藏馆</span>
               <ChevronRight size={14} />
               <strong>
-                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "operations" ? "操作记录" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "pinned"
-                  ? "置顶收藏"
+                {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "operations" ? "操作记录" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "favorites"
+                  ? "个人书签"
                   : (category?.name ?? "全部书签")}
               </strong>
             </div>
@@ -858,14 +871,14 @@ export default function App() {
                   aria-label="搜索书签"
                   placeholder="搜索名称、网址或标签…"
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => changeSearch(event.target.value)}
                 />
                 {query ? (
                   <button
                     className="search-clear"
                     type="button"
                     onClick={() => {
-                      setQuery("");
+                      changeSearch("");
                       searchRef.current?.focus();
                     }}
                     aria-label="清空搜索"
@@ -886,6 +899,7 @@ export default function App() {
                     className="login-button"
                     onClick={() => void logout()}
                     title="退出登录"
+                    disabled={sessionChanging}
                   >
                     <LogOut size={15} />
                     <span>退出</span>
@@ -900,6 +914,7 @@ export default function App() {
                   <button
                     className="login-button"
                     onClick={() => setModal({ kind: "login" })}
+                    disabled={sessionChanging}
                   >
                     <LogIn size={15} />
                     <span>登录</span>
@@ -938,7 +953,7 @@ export default function App() {
               <LockKeyhole size={36} />
               <h1>这是一个私人收藏馆</h1>
               <p>登录后即可查看书签。需要账号时，请联系管理员。</p>
-              <button className="primary-button" onClick={() => setModal({ kind: "login" })}>
+              <button className="primary-button" disabled={sessionChanging} onClick={() => setModal({ kind: "login" })}>
                 <LogIn size={16} />登录查看
               </button>
             </main>
@@ -1081,14 +1096,13 @@ export default function App() {
                   untagged={untagged}
                   untaggedCount={untaggedCount}
                   onUntagged={() => {
-                    setUntagged(!untagged);
-                    setSelectedTagIds([]);
+                    navigate({ untagged: !untagged, selectedTagIds: [], page: 1 });
                   }}
                   matchMode={tagMatchMode}
-                  onMatchMode={setTagMatchMode}
+                  onMatchMode={(mode) => navigate({ tagMatchMode: mode, page: 1 })}
                   folderName={
-                    filter === "pinned"
-                      ? "置顶收藏"
+                    filter === "favorites"
+                      ? "个人书签"
                       : (category?.name ?? "全部文件夹")
                   }
                   query={query}
@@ -1108,8 +1122,8 @@ export default function App() {
                   <p className="section-subtitle">
                     {query.trim()
                       ? `与「${query.trim()}」有关的收藏`
-                      : filter === "pinned"
-                        ? "在全部书签中单独置顶的收藏"
+                      : filter === "favorites"
+                        ? "只属于你的收藏，点击星形按钮随时整理"
                         : category
                           ? "同一种热爱，不同的好发现"
                           : "每一个收藏，都是一次值得的发现"}
@@ -1118,14 +1132,14 @@ export default function App() {
                 <div className="collection-tools">
                   <label className="page-size-control">
                     <span>每页</span>
-                    <select aria-label="每页显示" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                    <select aria-label="每页显示" value={pageSize} onChange={(event) => navigate({ pageSize: Number(event.target.value), page: 1 })}>
                       {[20, 50, 100].map((size) => <option key={size} value={size}>{size} 个</option>)}
                     </select>
                   </label>
                   <div className="sort-tabs" aria-label="排序方式">
                     <button
                       className={sort === "popular" ? "active" : ""}
-                      onClick={() => setSort("popular")}
+                      onClick={() => navigate({ sort: "popular", page: 1 })}
                       aria-pressed={sort === "popular"}
                     >
                       <ArrowDownWideNarrow size={14} />
@@ -1133,7 +1147,7 @@ export default function App() {
                     </button>
                     <button
                       className={sort === "recent" ? "active" : ""}
-                      onClick={() => setSort("recent")}
+                      onClick={() => navigate({ sort: "recent", page: 1 })}
                       aria-pressed={sort === "recent"}
                     >
                       最近添加
@@ -1253,6 +1267,18 @@ export default function App() {
                     重新加载
                   </button>
                 </div>
+              ) : visible.length === 0 && filter === "favorites" ? (
+                <div className="empty-state favorites-empty">
+                  <Star size={34} />
+                  <h3>{favoriteCount ? "没有匹配的个人书签" : "还没有个人书签"}</h3>
+                  <p>{favoriteCount
+                    ? "试试调整关键词或标签。也可以在全部书签中点击星形按钮，继续收藏喜欢的网站。"
+                    : "在全部书签中点击卡片上的星形按钮，就能把喜欢的网站加入这里。"}</p>
+                  <div className="favorites-empty-actions">
+                    {favoriteCount > 0 && <button className="secondary-button" onClick={() => navigate({ query: "", selectedTagIds: [], tagMatchMode: "all", untagged: false, page: 1 })}>清空个人书签筛选</button>}
+                    <button className="secondary-button" onClick={resetFilters}>浏览全部书签</button>
+                  </div>
+                </div>
               ) : visible.length === 0 ? (
                 <div className="empty-state">
                   <Search size={34} />
@@ -1311,6 +1337,14 @@ export default function App() {
                                 置顶
                               </span>
                             )}
+                            {data?.user && <div className="card-actions">
+                              <FavoriteButton
+                                title={bookmark.title}
+                                favorited={favoriteIds.has(bookmark.id)}
+                                busy={pendingFavoriteIds.includes(bookmark.id)}
+                                disabled={sessionChanging}
+                                onClick={() => void toggleFavorite(bookmark)}
+                              />
                             {canPinBookmarks && (
                               <div className="card-menu">
                                 <button
@@ -1346,6 +1380,7 @@ export default function App() {
                                 </button></>}
                               </div>
                             )}
+                            </div>}
                           </div>
                         </div>
                         <a
@@ -1492,7 +1527,8 @@ export default function App() {
         <LoginModal
           onClose={() => setModal(null)}
           onLogin={(user) => {
-            setData((current) => (current ? { ...current, user } : current));
+            resetFavorites(user.id);
+            setData((current) => (current ? { ...current, user, favoriteBookmarkIds: [] } : current));
             void refreshData().catch((error) =>
               setToast({ message: messageOf(error), error: true }),
             );
@@ -1556,8 +1592,7 @@ export default function App() {
             const removedId = modal.category.id;
             setModal(null);
             setMobileOpen(false);
-            setView("bookmarks");
-            setFilter((current) => current === removedId ? "all" : current);
+            navigate((current) => ({ ...current, view: "bookmarks", filter: current.filter === removedId ? "all" : current.filter }), "replace");
             setData((current) => current ? { ...current, categories: current.categories.filter((item) => item.id !== removedId) } : current);
             try {
               await Promise.all([refreshData(), loadInbox()]);

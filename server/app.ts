@@ -5,6 +5,7 @@ import type { Database, Statement } from './db.js'
 import { hashPassword, verifyPassword } from './password.js'
 import { ApiError } from './errors.js'
 import { auditedMutation, listOperations, operationDetail, revertOperation } from './audit.js'
+import { RateLimiter, RateLimitError } from './rate-limit.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -12,7 +13,7 @@ export interface AppConfig {
   sessionSecret: string
   secureCookies?: boolean
   publicOrigin?: string
-  /** Used by the Node adapter; the Cloudflare adapter reads CF-Connecting-IP. */
+  /** Each runtime supplies a trusted client address; request headers are not trusted by default. */
   clientIp?: (context: Context) => string
 }
 
@@ -61,7 +62,7 @@ export interface SiteSettings {
   allowUserAddBookmarks: boolean
   allowUserPinBookmarks: boolean
 }
-type AppEnv = { Variables: { user: User | null; settings: SiteSettings } }
+type AppEnv = { Variables: { user: User | null; settings: SiteSettings; visitorId: string; clientIp: string } }
 const userFields = 'id, username, role, password_hash AS passwordHash, session_version AS sessionVersion'
 const asUser = (user: Pick<User, 'id' | 'username' | 'role'>, settings: SiteSettings): User => ({
   id: user.id, username: user.username, role: user.role,
@@ -73,6 +74,8 @@ const bookmarkFields = 'id, title, url, description, category_id AS categoryId, 
 const submissionFields = 'id, title, url, description, category_id AS categoryId, status, created_at AS createdAt, created_by AS createdBy'
 const categoryFields = 'id, name, icon, color, sort_order AS sortOrder'
 const COOKIE_NAME = 'bookmark_s_session'
+const VISITOR_COOKIE_NAME = 'bookmark_s_visitor'
+const VISITOR_SECONDS = 60 * 60 * 24 * 180
 const SESSION_SECONDS = 60 * 60 * 24 * 7
 const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const decode = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0))
@@ -167,7 +170,7 @@ export function createApp(db: Database, config: AppConfig) {
   }
   const encoder = new TextEncoder()
   const signingKey = crypto.subtle.importKey('raw', encoder.encode(config.sessionSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
-  const rateBuckets = new Map<string, { count: number; expires: number }>()
+  const rateLimiter = new RateLimiter()
   const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, canPinBookmarks: true, isOwner: true }
 
   async function getSettings(): Promise<SiteSettings> {
@@ -197,22 +200,26 @@ export function createApp(db: Database, config: AppConfig) {
     return difference === 0
   }
 
-  function rateLimit(c: Context, purpose: string, max: number, seconds: number) {
-    const ip = config.clientIp?.(c) ?? c.req.header('cf-connecting-ip') ?? 'local'
-    const key = `${purpose}:${ip}`
-    const now = Date.now()
-    if (rateBuckets.size > 5000) {
-      for (const [id, bucket] of rateBuckets) if (bucket.expires <= now) rateBuckets.delete(id)
-      if (rateBuckets.size > 10000) rateBuckets.delete(rateBuckets.keys().next().value!)
+  function rateLimit(c: Context<AppEnv>, purpose: string, max: number, seconds: number) {
+    return rateLimiter.reserve([{ key: JSON.stringify([purpose, c.get('clientIp')]), max, seconds }])
+  }
+
+  async function visitorIdentity(c: Context) {
+    const token = getCookie(c, VISITOR_COOKIE_NAME)
+    if (token && token.length < 200) {
+      try {
+        const parts = token.split('.')
+        const [id, expires, signature] = parts
+        if (parts.length === 3 && /^[0-9a-f-]{36}$/.test(id) && /^\d{13}$/.test(expires) && Number(expires) > Date.now()
+          && await crypto.subtle.verify('HMAC', await signingKey, decode(signature), encoder.encode(`visitor:${id}.${expires}`))) {
+          return { id }
+        }
+      } catch { /* Invalid signatures and malformed cookies receive a new anonymous ID. */ }
     }
-    const bucket = rateBuckets.get(key)
-    if (bucket && bucket.expires > now) {
-      if (bucket.count >= max) {
-        c.header('Retry-After', String(Math.ceil((bucket.expires - now) / 1000)))
-        throw new ApiError('操作有点频繁，请稍后再试', 429)
-      }
-      bucket.count++
-    } else rateBuckets.set(key, { count: 1, expires: now + seconds * 1000 })
+    const id = crypto.randomUUID()
+    const payload = `${id}.${Date.now() + VISITOR_SECONDS * 1000}`
+    const signature = encode(new Uint8Array(await crypto.subtle.sign('HMAC', await signingKey, encoder.encode(`visitor:${payload}`))))
+    return { id, cookie: `${payload}.${signature}` }
   }
 
   async function getUser(c: Context, settings: SiteSettings) {
@@ -377,11 +384,19 @@ export function createApp(db: Database, config: AppConfig) {
     const user = await getUser(c, settings)
     c.set('user', user)
     c.set('settings', settings)
+    c.set('clientIp', config.clientIp?.(c) || 'local')
     // Only login, logout, health and an empty bootstrap remain public in private mode.
     if (!user && settings.siteMode === 'private' && !['/api/bootstrap', '/api/health', '/api/auth/login', '/api/auth/logout'].includes(c.req.path)) {
       throw new ApiError('这是私人书签站，请先登录后查看', 401)
     }
+    if (c.req.path === '/api/health') return next()
+    const visitor = await visitorIdentity(c)
+    c.set('visitorId', visitor.id)
     await next()
+    if (visitor.cookie) setCookie(c, VISITOR_COOKIE_NAME, visitor.cookie, {
+      httpOnly: true, secure: config.secureCookies ?? new URL(c.req.url).protocol === 'https:',
+      sameSite: 'Lax', path: '/', maxAge: VISITOR_SECONDS,
+    })
   })
 
   app.get('/api/health', c => c.json({ ok: true }))
@@ -390,20 +405,23 @@ export function createApp(db: Database, config: AppConfig) {
     const user = c.get('user')
     const settings = c.get('settings')
     if (settings.siteMode === 'private' && !user) return c.json({
-      ...settings, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [],
+      ...settings, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
       stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
     })
-    const [categories, records, blockedTagIds] = await Promise.all([
+    const [categories, records, blockedTagIds, favorites] = await Promise.all([
       db.all<Category>(`SELECT ${categoryFields} FROM categories ORDER BY sort_order, name`),
       db.all<Bookmark>(`SELECT ${bookmarkFields} FROM bookmarks ORDER BY pinned DESC, clicks DESC, created_at DESC, id`),
       user ? blockedTags(user.id) : Promise.resolve([] as string[]),
+      user ? db.all<{ bookmarkId: string }>('SELECT bookmark_id AS bookmarkId FROM user_favorites WHERE user_id = ? ORDER BY created_at DESC,bookmark_id', [user.id]) : Promise.resolve([]),
     ])
     const blocked = new Set(blockedTagIds)
     const bookmarks = (await withTags(records, 'bookmark')).filter(bookmark => !bookmark.tags.some(tag => blocked.has(tag.id))).map(asBookmark)
+    const visibleIds = new Set(bookmarks.map(bookmark => bookmark.id))
     const tags = await listTags(user?.role === 'admin' && !blocked.size, blocked.size ? bookmarks.map(bookmark => bookmark.id) : undefined)
     return c.json({
       categories,
       bookmarks,
+      favoriteBookmarkIds: favorites.filter(favorite => visibleIds.has(favorite.bookmarkId)).map(favorite => favorite.bookmarkId),
       tags,
       user,
       ...settings,
@@ -413,23 +431,35 @@ export function createApp(db: Database, config: AppConfig) {
   })
 
   app.post('/api/auth/login', async c => {
-    rateLimit(c, 'login', 12, 15 * 60)
+    // A wider IP ceiling remains even when anonymous cookies/account names rotate.
+    rateLimit(c, 'login:ip', 120, 15 * 60)
     const body = await readBody(c)
     const username = stringField(body.username, '用户名', 100)
-    if (typeof body.password !== 'string' || body.password.length > 256) throw new ApiError('用户名或密码不正确', 401)
+    const release = rateLimiter.reserve([
+      { key: JSON.stringify(['login:account', usernameKey(username), c.get('clientIp')]), max: 12, seconds: 15 * 60 },
+      { key: `login:visitor:${c.get('visitorId')}`, max: 12, seconds: 15 * 60 },
+    ])
     let user: User
     let version: number | undefined
-    if (usernameKey(username) === usernameKey(config.adminUsername)) {
-      const stored = await ownerPassword()
-      if (!await validOwnerPassword(body.password, stored)) throw new ApiError('用户名或密码不正确', 401)
-      user = owner
-      version = stored?.sessionVersion
-    } else {
-      const stored = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE username_key = ?`, [usernameKey(username)])
-      if (!await verifyPassword(body.password, stored?.passwordHash) || !stored) throw new ApiError('用户名或密码不正确', 401)
-      user = asUser(stored, c.get('settings'))
-      version = stored.sessionVersion
+    try {
+      if (typeof body.password !== 'string' || body.password.length > 256) throw new ApiError('用户名或密码不正确', 401)
+      if (usernameKey(username) === usernameKey(config.adminUsername)) {
+        const stored = await ownerPassword()
+        if (!await validOwnerPassword(body.password, stored)) throw new ApiError('用户名或密码不正确', 401)
+        user = owner
+        version = stored?.sessionVersion
+      } else {
+        const stored = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE username_key = ?`, [usernameKey(username)])
+        if (!await verifyPassword(body.password, stored?.passwordHash) || !stored) throw new ApiError('用户名或密码不正确', 401)
+        user = asUser(stored, c.get('settings'))
+        version = stored.sessionVersion
+      }
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401) release()
+      throw error
     }
+    // Successes do not exhaust the browser/account failure budgets.
+    release()
     const payload = encode(encoder.encode(JSON.stringify({ id: user.id, username: user.username, version, expires: Date.now() + SESSION_SECONDS * 1000 })))
     const signature = encode(new Uint8Array(await crypto.subtle.sign('HMAC', await signingKey, encoder.encode(payload))))
     setCookie(c, COOKIE_NAME, `${payload}.${signature}`, {
@@ -445,6 +475,31 @@ export function createApp(db: Database, config: AppConfig) {
   })
 
   app.get('/api/me/preferences', requireUser, async c => c.json(await preferences(c.get('user')!)))
+
+  app.on(['PUT', 'DELETE'], '/api/me/favorites/:bookmarkId', requireUser, async c => {
+    // This resource is always owned by the authenticated account, never a body field.
+    if ((await c.req.text()).trim()) {
+      const body = await readBody(c)
+      if (Object.keys(body).length) throw new ApiError('收藏操作不接受额外字段')
+    }
+    const user = c.get('user')!
+    const bookmarkId = c.req.param('bookmarkId')!
+    if (c.req.method === 'DELETE') {
+      await db.run('DELETE FROM user_favorites WHERE user_id = ? AND bookmark_id = ?', [user.id, bookmarkId])
+      return c.json({ bookmarkId, favorited: false })
+    }
+    // Resolve both bookmark existence and account deletion inside the write.
+    // The no-op update makes retries idempotent without changing the first saved date.
+    const saved = await db.get<{ bookmarkId: string }>(`INSERT INTO user_favorites (user_id,bookmark_id)
+      SELECT ?,id FROM bookmarks WHERE id = ? AND (? = 'owner' OR EXISTS (SELECT 1 FROM users WHERE id = ?))
+      ON CONFLICT(user_id,bookmark_id) DO UPDATE SET bookmark_id = excluded.bookmark_id
+      RETURNING bookmark_id AS bookmarkId`, [user.id, bookmarkId, user.id, user.id])
+    if (!saved) {
+      if (!user.isOwner && !await db.get('SELECT id FROM users WHERE id = ?', [user.id])) throw new ApiError('登录已失效，请重新登录', 401)
+      throw new ApiError('这个书签不存在', 404)
+    }
+    return c.json({ bookmarkId, favorited: true })
+  })
 
   app.patch('/api/me/preferences', requireUser, async c => {
     const user = c.get('user')!
@@ -781,7 +836,11 @@ export function createApp(db: Database, config: AppConfig) {
   })
 
   app.post('/api/submissions', async c => {
-    rateLimit(c, 'submission', 5, 60 * 60)
+    const user = c.get('user')
+    rateLimiter.reserve([
+      { key: JSON.stringify(['submission:ip', c.get('clientIp')]), max: 60, seconds: 60 * 60 },
+      { key: user ? `submission:user:${user.id}` : `submission:visitor:${c.get('visitorId')}`, max: 5, seconds: 60 * 60 },
+    ])
     const body = await readBody(c)
     const { title, url, description, categoryId, categoryIds } = await validateBookmark(body)
     const tags = tagInputs(body.tags)
@@ -831,6 +890,7 @@ export function createApp(db: Database, config: AppConfig) {
   app.all('/api/*', c => c.json({ error: '找不到这个接口' }, 404))
   app.notFound(c => c.json({ error: '找不到这个接口' }, 404))
   app.onError((error, c) => {
+    if (error instanceof RateLimitError) c.header('Retry-After', String(error.retryAfter))
     if (error instanceof ApiError) return c.json({ error: error.message }, error.status)
     if (error.message.includes('BOOKMARK_TAG_LIMIT')) return c.json({ error: '每个书签最多 12 个标签' }, 400)
     if (error.message.includes('UNIQUE constraint failed')) return c.json({ error: '这条记录已经存在，请刷新后重试' }, 409)

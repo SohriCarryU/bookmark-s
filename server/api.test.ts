@@ -125,10 +125,11 @@ test('login and recommendation endpoints apply basic rate limits', async t => {
   const response = await request('/api/auth/login', 'POST', { username: 'admin', password: 'wrong' })
   assert.equal(response.status, 429)
   assert.ok(Number(response.headers.get('retry-after')) > 0)
+  const visitorCookie = (await request('/api/bootstrap')).headers.get('set-cookie')!.split(';')[0]
   for (let index = 0; index < 5; index++) {
-    assert.equal((await request('/api/submissions', 'POST', { title: 'Site', url: `https://example${index}.com`, categoryId: 'explore' })).status, 201)
+    assert.equal((await request('/api/submissions', 'POST', { title: 'Site', url: `https://example${index}.com`, categoryId: 'explore' }, visitorCookie)).status, 201)
   }
-  assert.equal((await request('/api/submissions', 'POST', { title: 'Site', url: 'https://limited.example', categoryId: 'explore' })).status, 429)
+  assert.equal((await request('/api/submissions', 'POST', { title: 'Site', url: 'https://limited.example', categoryId: 'explore' }, visitorCookie)).status, 429)
 })
 
 test('SQLite persists changes and never reseeds an intentionally emptied collection', async () => {
@@ -161,7 +162,8 @@ test('Cloudflare migration and local initialization produce the same schema and 
   migration.exec(readFileSync(new URL('../migrations/0005_collections_preferences.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0006_operations.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0007_category_operations.sql', import.meta.url), 'utf8'))
-  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users', 'bookmark_categories', 'submission_categories', 'bookmark_editors', 'user_blocked_tags', 'owner_auth', 'operations', 'operation_changes', 'operation_tag_changes', 'operation_submission_changes', 'bookmark_revisions', 'operation_guards', 'operation_category_changes']) {
+  migration.exec(readFileSync(new URL('../migrations/0008_personal_favorites.sql', import.meta.url), 'utf8'))
+  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users', 'bookmark_categories', 'submission_categories', 'bookmark_editors', 'user_blocked_tags', 'owner_auth', 'operations', 'operation_changes', 'operation_tag_changes', 'operation_submission_changes', 'bookmark_revisions', 'operation_guards', 'operation_category_changes', 'user_favorites', 'favorite_revert_stash']) {
     assert.deepEqual(await local.all(`PRAGMA table_info(${table})`), migration.prepare(`PRAGMA table_info(${table})`).all())
   }
   for (const sql of [
@@ -173,6 +175,8 @@ test('Cloudflare migration and local initialization produce the same schema and 
     'SELECT * FROM submission_categories ORDER BY submission_id,category_id',
     'SELECT * FROM bookmark_editors ORDER BY bookmark_id,username',
     'SELECT * FROM user_blocked_tags ORDER BY user_id,tag_id',
+    'SELECT * FROM user_favorites ORDER BY user_id,bookmark_id',
+    'SELECT * FROM favorite_revert_stash ORDER BY guard_id,user_id,bookmark_id',
     'SELECT * FROM owner_auth ORDER BY id',
     'SELECT * FROM operations ORDER BY id',
     'SELECT * FROM bookmark_revisions ORDER BY bookmark_id',

@@ -7,10 +7,12 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { createApp } from './app.js'
 import { createSqliteDatabase } from './sqlite.js'
+import { createClientIpResolver } from './client-ip.js'
 
 const production = process.env.NODE_ENV === 'production'
 const adminPassword = process.env.ADMIN_PASSWORD || (production ? '' : 'bookmark-s-demo')
 const sessionSecret = process.env.SESSION_SECRET || (production ? '' : randomBytes(48).toString('hex'))
+const resolveClientIp = createClientIpResolver(process.env.TRUSTED_PROXIES)
 if (production && adminPassword.length < 10) throw new Error('Production requires ADMIN_PASSWORD with at least 10 characters.')
 if (production && sessionSecret.length < 32) throw new Error('Production requires SESSION_SECRET with at least 32 characters.')
 const databasePath = resolve(process.env.DB_PATH || 'data/bookmark-s.sqlite')
@@ -23,7 +25,7 @@ const app = createApp(db, {
   publicOrigin: process.env.PUBLIC_URL,
   secureCookies: process.env.SECURE_COOKIES === undefined ? production : process.env.SECURE_COOKIES === 'true',
   clientIp: c => {
-    try { return getConnInfo(c).remote.address ?? 'local' } catch { return 'local' }
+    try { return resolveClientIp(getConnInfo(c).remote.address, c.req.header('x-forwarded-for')) } catch { return 'local' }
   },
 })
 

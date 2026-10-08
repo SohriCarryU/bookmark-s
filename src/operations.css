@@ -29,15 +29,15 @@
 .operations-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding-bottom: 19px; margin-bottom: 16px; border-bottom: 1px solid #edf0e7; }
 .operations-detail-heading > div { min-width: 0; }
 .operations-detail-heading h2 { font-size: 19px; font-weight: 600; margin: 0 0 8px; }
-.operations-detail-heading p { color: #97a28b; font-size: 12px; line-height: 1.9; margin: 0; overflow-wrap: anywhere; }
+.operations-detail-heading p { color: var(--muted); font-size: 12px; line-height: 1.9; margin: 0; overflow-wrap: anywhere; }
 .operations-detail-heading > button { flex-shrink: 0; }
-.operations-detail-count { color: #8c9b7d; font-size: 13px; line-height: 1.9; margin: 0 0 15px; }
+.operations-detail-count { color: var(--muted); font-size: 13px; line-height: 1.9; margin: 0 0 15px; }
 .operations-bookmark-changes { display: flex; flex-direction: column; gap: 11px; }
 .operations-bookmark-change { border: 1px solid #e1e8d8; border-radius: 9px; overflow: hidden; min-width: 0; }
 .operations-bookmark-change > summary { display: flex; align-items: center; gap: 10px; padding: 13px 15px; background: #f5f8f0; cursor: pointer; list-style: none; }
 .operations-bookmark-change > summary::-webkit-details-marker { display: none; }
 .operations-bookmark-change > summary > span { min-width: 0; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; line-height: 1.8; }
-.operations-bookmark-change > summary small { flex-shrink: 0; margin-left: auto; color: #96a488; font-size: 11px; white-space: nowrap; }
+.operations-bookmark-change > summary small { flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .operations-bookmark-change > summary > svg { flex-shrink: 0; color: #91a080; }
 .operations-bookmark-change[open] > summary > svg { transform: rotate(180deg); }
 .operations-change-content { padding: 15px; }
@@ -46,15 +46,15 @@
 .operations-change-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .operations-before, .operations-after { min-width: 0; padding: 10px 12px; border: 1px solid #e9e8df; border-radius: 7px; background: #faf8f3; }
 .operations-after { border-color: #e0e9d6; background: #f4f8ee; }
-.operations-value-label { color: #a69a86; font-size: 11px; }
-.operations-after .operations-value-label { color: #90a37c; }
-.operations-change-pair p { color: #7f8775; margin: 6px 0 0; font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; white-space: pre-wrap; }
+.operations-value-label { color: var(--muted); font-size: 11px; }
+.operations-after .operations-value-label { color: var(--muted); }
+.operations-change-pair p { color: var(--muted); margin: 6px 0 0; font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; white-space: pre-wrap; }
 .operations-tag-changes { margin-bottom: 16px; }
 .operations-tag-changes h3 { font-size: 14px; font-weight: 500; margin: 0 0 10px; }
 .operations-tag-changes > .operations-change-pair + .operations-change-pair { margin-top: 9px; }
-.operations-detail-note { color: #99a58c; font-size: 12px; line-height: 1.9; margin: 13px 0 0; }
+.operations-detail-note { color: var(--muted); font-size: 12px; line-height: 1.9; margin: 13px 0 0; }
 .operations-revert-area { display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap; padding-top: 20px; margin-top: 20px; border-top: 1px solid #e9ede2; }
-.operations-revert-area > p, .operations-revert-unavailable { display: flex; align-items: flex-start; gap: 8px; color: #91a17f; font-size: 12px; line-height: 1.9; margin: 0; }
+.operations-revert-area > p, .operations-revert-unavailable { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.9; margin: 0; }
 .operations-revert-area > p > svg, .operations-revert-unavailable > svg { flex-shrink: 0; margin-top: 2px; }
 .operations-revert-unavailable { margin-top: 18px; padding: 13px; background: #f4f6ef; border-radius: 8px; }
 .operations-revert-confirm { width: 100%; min-width: 0; padding: 16px; background: #fcf7ef; border: 1px solid #ecdfc9; border-radius: 9px; }

@@ -200,6 +200,10 @@ export async function operationDetail(db: Database, id: string) {
 function restoreStatements(source: string, revertId: string): Statement[] {
   const sourceParams = [source]
   return [
+    { sql: `INSERT INTO favorite_revert_stash (guard_id,user_id,bookmark_id,created_at)
+      SELECT ?,favorites.user_id,favorites.bookmark_id,favorites.created_at FROM user_favorites favorites
+      JOIN operation_changes changes ON changes.bookmark_id = favorites.bookmark_id
+      WHERE changes.operation_id = ? AND changes.before_json IS NOT NULL`, params: [revertId, source] },
     { sql: `INSERT INTO categories (id,name,icon,color,sort_order)
       SELECT category_id,json_extract(before_json,'$.name'),json_extract(before_json,'$.icon'),json_extract(before_json,'$.color'),json_extract(before_json,'$.sortOrder')
       FROM operation_category_changes WHERE operation_id = ? AND before_json IS NOT NULL
@@ -218,6 +222,10 @@ function restoreStatements(source: string, revertId: string): Statement[] {
         json_extract(oc.before_json,'$.pinned'),json_extract(oc.before_json,'$.createdAt'),json_extract(oc.before_json,'$.createdBy'),json_extract(oc.before_json,'$._sourceSubmissionId')
       FROM operation_changes oc LEFT JOIN operation_changes current ON current.operation_id = ? AND current.bookmark_id = oc.bookmark_id
       WHERE oc.operation_id = ? AND oc.before_json IS NOT NULL`, params: [revertId, source] },
+    { sql: `INSERT INTO user_favorites (user_id,bookmark_id,created_at)
+      SELECT saved.user_id,saved.bookmark_id,saved.created_at FROM favorite_revert_stash saved
+      JOIN bookmarks ON bookmarks.id = saved.bookmark_id WHERE saved.guard_id = ?
+      AND (saved.user_id = 'owner' OR EXISTS (SELECT 1 FROM users WHERE id = saved.user_id))`, params: [revertId] },
     { sql: 'DELETE FROM bookmark_categories WHERE bookmark_id IN (SELECT bookmark_id FROM operation_changes WHERE operation_id = ?)', params: sourceParams },
     { sql: `INSERT INTO bookmark_categories (bookmark_id,category_id,pinned,position)
       SELECT oc.bookmark_id,category.value,EXISTS (SELECT 1 FROM json_each(oc.before_json,'$.pinnedCategoryIds') pin WHERE pin.value = category.value),CAST(category.key AS INTEGER)

@@ -240,7 +240,7 @@ test('private mode returns an empty anonymous bootstrap and blocks every content
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'secret' }, owner)).status, 400)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)).status, 200)
   assert.deepEqual(await (await request('/api/bootstrap')).json(), {
-    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [],
+    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   })
   for (const [path, method, body] of [

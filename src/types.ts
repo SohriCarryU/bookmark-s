@@ -59,6 +59,7 @@ export type Bootstrap = {
   categories: Category[];
   tags: TagCount[];
   bookmarks: Bookmark[];
+  favoriteBookmarkIds: string[];
   user: User | null;
   siteMode: "public" | "private";
   allowUserAddBookmarks: boolean;

@@ -28,6 +28,8 @@ export default {
         sessionSecret: env.SESSION_SECRET,
         publicOrigin: env.PUBLIC_URL,
         secureCookies: env.SECURE_COOKIES === undefined ? undefined : env.SECURE_COOKIES === 'true',
+        // Cloudflare supplies this header; generic API/Node callers never trust it.
+        clientIp: c => c.req.header('cf-connecting-ip') || 'local',
       }),
     }
     return cached.app.fetch(request)
