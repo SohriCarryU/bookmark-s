@@ -81,7 +81,8 @@ function tableExport(table: SchemaEntry, allColumns: ColumnEntry[]) {
   const expression = `${literal(prefix)} || ${values.join(" || ', ' || ")} || ');'`
   // Credentials, lock leases and schedules must be configured again on the
   // restored installation. Matching the literal prefix avoids LIKE's '_' wildcard.
-  const where = table.name.toLowerCase() === 'settings' ? ` WHERE substr(lower("key"), 1, 7) != 'webdav_'` : ''
+  const where = table.name.toLowerCase() === 'settings'
+    ? ` WHERE substr(lower("key"), 1, 7) != 'webdav_' AND substr(lower("key"), 1, 3) != 's3_'` : ''
   return `SELECT ${expression} AS sql FROM ${identifier(table.name)}${where}`
 }
 
@@ -120,7 +121,7 @@ export async function createDatabaseBackup(db: Database, createdAt = new Date())
 
     // Foreign keys are deferred until all rows exist. Create triggers after
     // loading the data so restore does not replay historical side effects.
-    const before = `-- bookmark-s database backup\n-- Created at: ${createdAt.toISOString()}\n-- Restore into an empty SQLite database. WebDAV settings are excluded.\nPRAGMA foreign_keys = ON;\nBEGIN TRANSACTION;\nPRAGMA defer_foreign_keys = ON;\n\n${tables.map(schemaStatement).join('')}\n`
+    const before = `-- bookmark-s database backup\n-- Created at: ${createdAt.toISOString()}\n-- Restore into an empty SQLite database. WebDAV and S3 settings are excluded.\nPRAGMA foreign_keys = ON;\nBEGIN TRANSACTION;\nPRAGMA defer_foreign_keys = ON;\n\n${tables.map(schemaStatement).join('')}\n`
     const secondaryObjects = ['view', 'index', 'trigger'].flatMap(type => schema.filter(entry => entry.type === type))
     const after = `\n${secondaryObjects.map(schemaStatement).join('')}\nCOMMIT;\n`
     const remainingBytes = MAX_BACKUP_BYTES - encoder.encode(before).byteLength - encoder.encode(after).byteLength

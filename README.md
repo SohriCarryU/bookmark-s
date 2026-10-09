@@ -100,9 +100,29 @@ Node / Docker 在服务运行期间每分钟检查日程，并在启动时补跑
 
 每次生成带 UTC 时间和随机标识的新 `.sql` 文件。内容覆盖书签、文件夹与标签关系、点击数、置顶、个人收藏、推荐、账号与密码哈希、访问权限、个人偏好和操作记录。SQLite 与 D1 都使用一致事务快照，表结构、索引、触发器和迁移记录随数据保存，文件可恢复到空数据库；单份 SQL 上限为 20 MiB，超出时明确失败，不生成截断文件。
 
-连接密码用 `SESSION_SECRET` 派生的密钥加密后存入数据库，页面只显示是否已保存。请保持生产环境的 `SESSION_SECRET` 稳定；更换后需重新输入 WebDAV 密码。SQL 文件不包含 WebDAV 连接配置、备份任务状态、`.env`、环境密钥和图标缓存，恢复后需重新配置 WebDAV。SQL 包含账号密码哈希等站点数据，应放在有访问控制的 WebDAV 目录中。
+连接密码用 `SESSION_SECRET` 派生的密钥加密后存入数据库，页面只显示是否已保存。请保持生产环境的 `SESSION_SECRET` 稳定；更换后需重新输入 WebDAV 密码。SQL 文件不包含 WebDAV 或 S3 连接配置、备份任务状态、`.env`、环境密钥和图标缓存，恢复后需重新配置备份目标。SQL 包含账号密码哈希等站点数据，应放在有访问控制的 WebDAV 目录或存储桶中。
 
 此次更新无需新增数据库迁移或环境变量，但包含新增的 XML 解析依赖。Node 部署更新代码后执行 `npm ci`、`npm run build`，再重启服务；Docker 重新构建镜像；Workers 执行 `npm ci`、`npm run cf:deploy`，同时发布 API、前端与定时触发配置。
+
+## S3 存储备份
+
+管理员可在「站点配置 → S3 存储备份」配置另一个独立备份目标，与 WebDAV 同时使用。填写 S3 Endpoint、区域（Region）、已有存储桶（Bucket）、Access Key ID、Secret Access Key 和备份前缀，先测试连接，再保存配置。Endpoint 是服务的 HTTPS 公网域名地址，可带端口，但不包含存储桶、其他路径或查询参数；存储桶需要事先创建。
+
+| 存储服务 | Endpoint 示例 | Region |
+| --- | --- | --- |
+| Amazon S3 | `https://s3.us-east-1.amazonaws.com` | 与存储桶一致，例如 `us-east-1` |
+| Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | `auto` |
+| MinIO / 其他 S3 兼容服务 | `https://s3.example.com:9000` | 按服务配置，常见为 `us-east-1` |
+
+默认启用「路径寻址（Path-style）」，请求地址形式为 `Endpoint/Bucket/对象`；关闭后使用 `Bucket.Endpoint域名/对象`。含点的存储桶名称需要启用路径寻址，避免 HTTPS 证书不匹配。默认前缀为 `bookmark-s/`，例如设置 `/backups/书签/` 会规范为 `backups/书签/`；留空则保存到桶根目录。不同站点应使用不同前缀。
+
+连接测试只列举所选前缀的对象，并创建、删除一个随机测试文件，不清理历史备份。账号需要该存储桶的 `s3:ListBucket` 权限，以及所选前缀对象的 `s3:PutObject`、`s3:DeleteObject` 权限。服务端使用 AWS Signature V4 对请求及上传内容签名，不跟随跳转；配置错误、权限不足、服务器时间偏差和网络错误会显示明确提示。Secret Access Key 加密保存在数据库中，不回显到页面；地址和 Access Key ID 未变时可留空沿用，更换其中任一项需重新输入密钥。
+
+手动和每日自动备份使用相同的完整 SQL 快照，内容与 WebDAV 备份一致，单份上限 20 MiB；两种存储的连接配置、密钥和任务状态都不进入 SQL 文件。自动备份默认关闭，开启后按北京时间执行，默认 03:00；Node / Docker 和 Workers 均在服务器端执行。S3 和 WebDAV 的计划、锁和结果相互独立，一个目标失败不会阻止另一个目标备份。
+
+「保留备份数量」默认 15，可填 0–1000，0 表示保留全部。新备份成功后才读取完整分页列表，按文件名时间清理最早的超额备份，始终保留本次新文件；只处理当前前缀下一层、符合本项目命名格式的 SQL 文件。删除使用强 ETag 条件，服务需支持 `ListObjectsV2`、条件创建和条件删除；列表异常、文件被替换、权限不足或清理超时会保留成功上传的备份，并提示清理未完成。已开启版本控制的存储桶，其历史对象版本和删除标记由存储服务的生命周期规则管理，本功能限制当前可见备份数量。
+
+新增了 S3 签名依赖，更新时需要同时发布前端与 API：Node 执行 `npm ci`、`npm run build` 后重启；Docker 重新构建镜像；Workers 执行 `npm ci`、`npm run cf:deploy`。无需新增数据库迁移或环境变量，现有 WebDAV 配置会继续保留。
 
 ## 操作记录与回退
 

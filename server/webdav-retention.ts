@@ -1,4 +1,7 @@
 import { SaxesParser } from 'saxes'
+import { backupFileTimestamp as webDavBackupTimestamp } from './backup-files.js'
+
+export { backupFileTimestamp as webDavBackupTimestamp } from './backup-files.js'
 
 export const MAX_WEBDAV_LIST_BYTES = 2 * 1024 * 1024
 const MAX_LIST_ENTRIES = 5_000
@@ -25,15 +28,6 @@ interface ListedFile { filename: string; url: URL; timestamp: number; etag?: str
 
 function invalidListing(): never {
   throw new WebDavRetentionError('无法完整、安全地确认 WebDAV 目录内容，已跳过旧备份清理。')
-}
-
-/** Match only the SQL names produced by this application, including a real UTC date. */
-export function webDavBackupTimestamp(filename: string): number | undefined {
-  const match = /^bookmark-s-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-[0-9a-f]{8}\.sql$/.exec(filename)
-  if (!match) return undefined
-  const iso = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}.${match[7]}Z`
-  const timestamp = Date.parse(iso)
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === iso ? timestamp : undefined
 }
 
 function parseXml(xml: string): XmlNode {

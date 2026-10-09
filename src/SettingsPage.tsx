@@ -3,6 +3,7 @@ import { Check, Globe2, LoaderCircle, LockKeyhole, Save, Settings2, ShieldCheck 
 import { api, messageOf } from "./api";
 import type { SiteSettings } from "./types";
 import WebDavSettings from "./WebDavSettings";
+import S3Settings from "./S3Settings";
 import "./settings.css";
 
 type PermissionKey = "allowUserAddBookmarks" | "allowUserPinBookmarks";
@@ -144,6 +145,7 @@ export default function SettingsPage({
         {permissionError && <p className="form-error" role="alert">{permissionError}</p>}
       </section>
       <WebDavSettings onNotify={onNotify} />
+      <S3Settings onNotify={onNotify} />
     </div>
   );
 }

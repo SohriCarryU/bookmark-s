@@ -102,13 +102,14 @@ test('SQL literals preserve quotes, newlines, NUL, binary, int64 and real number
   assert.equal(restored.prepare('SELECT derived FROM backup_values_view WHERE id = 1').get()!.derived, 'updated through view!')
 })
 
-test('excludes WebDAV and platform internals while preserving Wrangler migration history for subsequent upgrades', async t => {
+test('excludes both storage providers and platform internals while preserving Wrangler migration history for subsequent upgrades', async t => {
   const source = createSqliteDatabase(':memory:')
   const restored = new DatabaseSync(':memory:')
   t.after(() => { source.close(); restored.close() })
   await source.batch([
     ...['webdav_url', 'webdav_password', 'webdav_lock', 'webdav_last_result', 'webdav_schedule', 'WebDAV_Secret'].map(key => ({ sql: 'INSERT INTO settings (key,value) VALUES (?,?)', params: [key, `sensitive-${key}`] })),
-    { sql: "INSERT INTO settings (key,value) VALUES ('webdavXunrelated','keep me'), ('site_title','我的导航')" },
+    ...['s3_config', 's3_state', 's3_schedule', 's3_lock', 'S3_Secret'].map(key => ({ sql: 'INSERT INTO settings (key,value) VALUES (?,?)', params: [key, `sensitive-${key}`] })),
+    { sql: "INSERT INTO settings (key,value) VALUES ('webdavXunrelated','keep me'), ('s3Xunrelated','also keep me'), ('site_title','我的导航')" },
     { sql: 'CREATE TABLE _cf_METADATA (id TEXT PRIMARY KEY, value TEXT)' },
     { sql: "INSERT INTO _cf_METADATA VALUES ('private','cloudflare-private-data')" },
     { sql: 'CREATE INDEX cf_internal_index ON _cf_METADATA(value)' },
@@ -119,11 +120,13 @@ test('excludes WebDAV and platform internals while preserving Wrangler migration
   ])
   const { bytes } = await createDatabaseBackup(source, fixedDate)
   const sql = decoder.decode(bytes)
-  assert.doesNotMatch(sql, /sensitive-|webdav_password|webdav_lock|webdav_last_result|_cf_METADATA|cf_internal_|sqlite_sequence|cloudflare-private-data/)
+  assert.doesNotMatch(sql, /sensitive-|webdav_password|webdav_lock|webdav_last_result|s3_config|s3_state|s3_schedule|s3_lock|_cf_METADATA|cf_internal_|sqlite_sequence|cloudflare-private-data/)
   restored.exec(sql)
   assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'webdavXunrelated'").get()!.value, 'keep me')
+  assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 's3Xunrelated'").get()!.value, 'also keep me')
   assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'site_title'").get()!.value, '我的导航')
   assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM settings WHERE substr(lower(key),1,7) = 'webdav_'").get()!.n, 0)
+  assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM settings WHERE substr(lower(key),1,3) = 's3_'").get()!.n, 0)
   assert.deepEqual(restored.prepare('SELECT * FROM d1_migrations ORDER BY id').all(), await source.all('SELECT * FROM d1_migrations ORDER BY id'))
   assert.equal(restored.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n, 8)
   restored.prepare("INSERT INTO d1_migrations (name) VALUES ('0009_next_feature.sql')").run()

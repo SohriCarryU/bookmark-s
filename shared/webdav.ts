@@ -1,3 +1,5 @@
+import type { BackupResult } from './backup.js'
+
 export interface WebDavSettingsInput {
   endpointUrl: string
   username: string
@@ -11,18 +13,7 @@ export interface WebDavSettingsInput {
   retentionCount?: number
 }
 
-export interface WebDavBackupResult {
-  status: 'running' | 'success' | 'error'
-  trigger: 'manual' | 'scheduled'
-  startedAt: string
-  finishedAt: string | null
-  fileName: string | null
-  sizeBytes: number | null
-  error: string | null
-  /** Upload succeeded, but old backups could not all be pruned. */
-  cleanupWarning?: string | null
-  deletedBackupCount?: number
-}
+export type WebDavBackupResult = BackupResult
 
 export interface WebDavSettings {
   configured: boolean

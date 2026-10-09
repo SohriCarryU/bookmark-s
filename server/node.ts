@@ -12,6 +12,8 @@ import { createSiteIconResolver } from './site-icons.js'
 import { createNodeIconFetcher } from './node-icon-fetch.js'
 import { createWebDavBackupService } from './webdav-backup.js'
 import { createNodeWebDavFetcher } from './node-webdav-fetch.js'
+import { createS3BackupService } from './s3-backup.js'
+import { createNodeS3Fetcher } from './node-s3-fetch.js'
 
 const production = process.env.NODE_ENV === 'production'
 const adminPassword = process.env.ADMIN_PASSWORD || (production ? '' : 'bookmark-s-demo')
@@ -23,6 +25,7 @@ const databasePath = resolve(process.env.DB_PATH || 'data/bookmark-s.sqlite')
 mkdirSync(dirname(databasePath), { recursive: true })
 const db = createSqliteDatabase(databasePath)
 const webdav = createWebDavBackupService({ db, sessionSecret, fetcher: createNodeWebDavFetcher() })
+const s3 = createS3BackupService({ db, sessionSecret, fetcher: createNodeS3Fetcher() })
 const app = createApp(db, {
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword,
@@ -31,6 +34,7 @@ const app = createApp(db, {
   secureCookies: process.env.SECURE_COOKIES === undefined ? production : process.env.SECURE_COOKIES === 'true',
   resolveSiteIcon: createSiteIconResolver(createNodeIconFetcher()),
   webdav,
+  s3,
   clientIp: c => {
     try { return resolveClientIp(getConnInfo(c).remote.address, c.req.header('x-forwarded-for')) } catch { return 'local' }
   },
@@ -50,8 +54,11 @@ let closing = false
 let scheduledBackup: Promise<void> | undefined
 function checkBackups() {
   if (closing || scheduledBackup) return
-  scheduledBackup = webdav.runScheduled()
-    .then(() => {}, () => console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.'))
+  scheduledBackup = Promise.all([
+    webdav.runScheduled().catch(() => console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.')),
+    s3.runScheduled().catch(() => console.error('[bookmark-s] Automatic S3 backup failed; see site settings for details.')),
+  ])
+    .then(() => {})
     .finally(() => { scheduledBackup = undefined })
 }
 const backupTimer = setInterval(checkBackups, 60_000)

@@ -33,6 +33,11 @@ function saveSettings(current: WebDavSettings, input: WebDavSettingsInput): WebD
 async function mockSettings(page: Page, respond: (route: Route, action: string, input: WebDavSettingsInput | null) => Promise<void>) {
   await page.route('**/api/bootstrap', route => route.fulfill({ json: bootstrap() }));
   await page.route('**/api/submissions', route => route.fulfill({ json: { submissions: [] } }));
+  await page.route('**/api/settings/s3', route => route.fulfill({ json: {
+    configured: false, endpointUrl: '', region: 'us-east-1', bucket: '', accessKeyId: '', hasSecretAccessKey: false,
+    prefix: 'bookmark-s/', forcePathStyle: true, autoBackupEnabled: false, backupTime: '03:00', retentionCount: 15,
+    timeZone: 'Asia/Shanghai', nextBackupAt: null, lastSuccessAt: null, lastBackup: null,
+  } }));
   await page.route(/\/api\/settings\/webdav(?:\/(?:test|backup))?$/, route => {
     const request = route.request();
     const action = `${request.method()} ${new URL(request.url()).pathname.replace('/api/settings/webdav', '') || '/'}`;

@@ -1,0 +1,8 @@
+.s3-provider-examples { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.s3-provider-examples summary { width: fit-content; cursor: pointer; color: #657953; }
+.s3-provider-examples summary:focus-visible { outline: 2px solid #93ac7e; outline-offset: 4px; border-radius: 3px; }
+.s3-provider-examples dl { display: grid; gap: 13px; padding: 14px; margin: 10px 0 0; border-radius: 8px; background: #f7f9f2; }
+.s3-provider-examples dt { color: #67735c; font-weight: 500; }
+.s3-provider-examples dd { margin: 3px 0 0; }
+.s3-provider-examples code { font-family: inherit; overflow-wrap: anywhere; }
+.s3-path-style.settings-permission-row { padding: 0 0 3px; }

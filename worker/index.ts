@@ -2,6 +2,8 @@ import { createApp } from '../server/app.js'
 import { createD1Database, type D1Binding } from '../server/db.js'
 import { createSiteIconResolver } from '../server/site-icons.js'
 import { createWebDavBackupService } from '../server/webdav-backup.js'
+import { createS3BackupService } from '../server/s3-backup.js'
+import type { S3Fetcher } from '../server/s3-client.js'
 
 interface Env {
   DB: D1Binding
@@ -14,22 +16,24 @@ interface Env {
 }
 
 // Keep one API app per environment in an isolate, preserving basic rate-limit buckets.
-let cached: { env: Env; app: ReturnType<typeof createApp>; webdav: ReturnType<typeof createWebDavBackupService> } | undefined
+let cached: { env: Env; app: ReturnType<typeof createApp>; webdav: ReturnType<typeof createWebDavBackupService>; s3: ReturnType<typeof createS3BackupService> } | undefined
 const configured = (env: Env) => Boolean(env.ADMIN_PASSWORD && env.ADMIN_PASSWORD.length >= 10 && env.SESSION_SECRET && env.SESSION_SECRET.length >= 32)
 
 function runtime(env: Env) {
   if (!cached || cached.env !== env) {
     const db = createD1Database(env.DB)
-    const webdav = createWebDavBackupService({
-      db, sessionSecret: env.SESSION_SECRET,
-      fetcher: (url, init) => fetch(url.href, {
-        method: init.method, headers: init.headers, body: init.body as BodyInit | undefined,
-        signal: init.signal, redirect: 'manual', credentials: 'omit',
-      }),
+    const fetchBackup: S3Fetcher = (url, init) => fetch(url.href, {
+      method: init.method, headers: init.headers, body: init.body as BodyInit | undefined,
+      signal: init.signal, redirect: 'manual', credentials: 'omit',
     })
+    const webdav = createWebDavBackupService({
+      db, sessionSecret: env.SESSION_SECRET, fetcher: fetchBackup,
+    })
+    const s3 = createS3BackupService({ db, sessionSecret: env.SESSION_SECRET, fetcher: fetchBackup })
     cached = {
       env,
       webdav,
+      s3,
       app: createApp(db, {
         adminUsername: env.ADMIN_USERNAME || 'admin',
         adminPassword: env.ADMIN_PASSWORD,
@@ -43,6 +47,7 @@ function runtime(env: Env) {
           headers: { Accept: accept, 'User-Agent': 'bookmark-s/1.0 (website icons)' },
         })),
         webdav,
+        s3,
         // Cloudflare supplies this header; generic API/Node callers never trust it.
         clientIp: c => c.req.header('cf-connecting-ip') || 'local',
       }),
@@ -62,11 +67,13 @@ export default {
   },
   scheduled(_controller: { scheduledTime: number }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
     if (!configured(env)) {
-      console.error('[bookmark-s] WebDAV scheduler requires the configured administrator and session secret.')
+      console.error('[bookmark-s] Backup scheduler requires the configured administrator and session secret.')
       return
     }
-    context.waitUntil(runtime(env).webdav.runScheduled().catch(() => {
-      console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.')
-    }))
+    const services = runtime(env)
+    context.waitUntil(Promise.all([
+      services.webdav.runScheduled().catch(() => console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.')),
+      services.s3.runScheduled().catch(() => console.error('[bookmark-s] Automatic S3 backup failed; see site settings for details.')),
+    ]))
   },
 }
