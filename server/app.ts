@@ -8,6 +8,7 @@ import { auditedMutation, listOperations, operationDetail, revertOperation } fro
 import { RateLimiter, RateLimitError } from './rate-limit.js'
 import { siteIconOrigin } from '../shared/site-icons.js'
 import type { SiteIconResolver } from './site-icons.js'
+import type { WebDavBackupService } from './webdav-backup.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -19,6 +20,7 @@ export interface AppConfig {
   clientIp?: (context: Context) => string
   /** Runtime-specific public-network transport and a bounded icon cache. */
   resolveSiteIcon?: SiteIconResolver
+  webdav?: WebDavBackupService
 }
 
 interface Category {
@@ -565,6 +567,25 @@ export function createApp(db: Database, config: AppConfig) {
   })
 
   app.get('/api/settings', requireAdmin, c => c.json(c.get('settings')))
+
+  const webdavService = () => {
+    if (!config.webdav) throw new ApiError('WebDAV 备份服务尚未启用，请更新并重启服务。', 503)
+    return config.webdav
+  }
+  app.get('/api/settings/webdav', requireAdmin, async c => c.json(await webdavService().getSettings()))
+  app.put('/api/settings/webdav', requireAdmin, async c => {
+    rateLimit(c, 'webdav:save', 30, 60)
+    return c.json(await webdavService().saveSettings(await readBody(c)))
+  })
+  app.post('/api/settings/webdav/test', requireAdmin, async c => {
+    rateLimit(c, 'webdav:test', 5, 60)
+    await webdavService().testConnection(await readBody(c))
+    return c.json({ ok: true })
+  })
+  app.post('/api/settings/webdav/backup', requireAdmin, async c => {
+    rateLimit(c, 'webdav:backup', 3, 60)
+    return c.json(await webdavService().backup())
+  })
 
   app.patch('/api/settings', requireAdmin, async c => {
     const body = await readBody(c)

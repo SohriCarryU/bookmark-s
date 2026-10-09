@@ -1,6 +1,7 @@
 import { createApp } from '../server/app.js'
 import { createD1Database, type D1Binding } from '../server/db.js'
 import { createSiteIconResolver } from '../server/site-icons.js'
+import { createWebDavBackupService } from '../server/webdav-backup.js'
 
 interface Env {
   DB: D1Binding
@@ -13,17 +14,23 @@ interface Env {
 }
 
 // Keep one API app per environment in an isolate, preserving basic rate-limit buckets.
-let cached: { env: Env; app: ReturnType<typeof createApp> } | undefined
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
-    if (!env.ADMIN_PASSWORD || env.ADMIN_PASSWORD.length < 10 || !env.SESSION_SECRET || env.SESSION_SECRET.length < 32) {
-      console.error('[bookmark-s] Configure ADMIN_PASSWORD (10+ characters) and SESSION_SECRET (32+ characters).')
-      return Response.json({ error: '服务尚未配置完成，请设置管理员密码和会话密钥' }, { status: 503 })
-    }
-    if (!cached || cached.env !== env) cached = {
+let cached: { env: Env; app: ReturnType<typeof createApp>; webdav: ReturnType<typeof createWebDavBackupService> } | undefined
+const configured = (env: Env) => Boolean(env.ADMIN_PASSWORD && env.ADMIN_PASSWORD.length >= 10 && env.SESSION_SECRET && env.SESSION_SECRET.length >= 32)
+
+function runtime(env: Env) {
+  if (!cached || cached.env !== env) {
+    const db = createD1Database(env.DB)
+    const webdav = createWebDavBackupService({
+      db, sessionSecret: env.SESSION_SECRET,
+      fetcher: (url, init) => fetch(url.href, {
+        method: init.method, headers: init.headers, body: init.body as BodyInit | undefined,
+        signal: init.signal, redirect: 'manual', credentials: 'omit',
+      }),
+    })
+    cached = {
       env,
-      app: createApp(createD1Database(env.DB), {
+      webdav,
+      app: createApp(db, {
         adminUsername: env.ADMIN_USERNAME || 'admin',
         adminPassword: env.ADMIN_PASSWORD,
         sessionSecret: env.SESSION_SECRET,
@@ -35,10 +42,31 @@ export default {
           method: 'GET', redirect: 'manual', credentials: 'omit', signal,
           headers: { Accept: accept, 'User-Agent': 'bookmark-s/1.0 (website icons)' },
         })),
+        webdav,
         // Cloudflare supplies this header; generic API/Node callers never trust it.
         clientIp: c => c.req.header('cf-connecting-ip') || 'local',
       }),
     }
-    return cached.app.fetch(request)
+  }
+  return cached
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
+    if (!configured(env)) {
+      console.error('[bookmark-s] Configure ADMIN_PASSWORD (10+ characters) and SESSION_SECRET (32+ characters).')
+      return Response.json({ error: '服务尚未配置完成，请设置管理员密码和会话密钥' }, { status: 503 })
+    }
+    return runtime(env).app.fetch(request)
+  },
+  scheduled(_controller: { scheduledTime: number }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
+    if (!configured(env)) {
+      console.error('[bookmark-s] WebDAV scheduler requires the configured administrator and session secret.')
+      return
+    }
+    context.waitUntil(runtime(env).webdav.runScheduled().catch(() => {
+      console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.')
+    }))
   },
 }

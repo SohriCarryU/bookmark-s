@@ -1,0 +1,39 @@
+.webdav-settings { overflow-wrap: anywhere; }
+.webdav-form-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; min-width: 0; border: 0; padding: 0; margin: 0; }
+.webdav-wide-field { grid-column: 1 / -1; }
+.webdav-schedule { margin-top: 22px; padding: 17px 18px; border: 1px solid #e4ebdc; border-radius: 10px; background: #f7f9f2; }
+.webdav-schedule .settings-permission-row { padding: 0; }
+.webdav-settings .webdav-time-field { max-width: 250px; margin-top: 17px; }
+.webdav-settings .webdav-time-field input { background: #fffefa; }
+.webdav-settings .webdav-time-field input:disabled { background: #f1f3eb; }
+.webdav-unsaved { margin: 12px 0 0; color: #8c6d3c; font-size: 12px; line-height: 1.9; }
+.webdav-feedback { margin: 13px 0 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.webdav-test-success { display: flex; align-items: flex-start; gap: 7px; color: #527848; }
+.webdav-test-success svg { flex-shrink: 0; margin-top: 3px; }
+.webdav-actions, .webdav-connection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.webdav-actions { justify-content: space-between; margin-top: 19px; }
+.webdav-actions button { min-width: 0; }
+.webdav-actions button:disabled { opacity: .62; }
+.webdav-backup-status { margin-top: 23px; padding-top: 19px; border-top: 1px solid #e8edde; }
+.webdav-status-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 9px; }
+.webdav-status-heading h3 { margin: 0; font-size: 14px; font-weight: 600; color: #556748; }
+.webdav-status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 6px; color: #829277; background: #f0f3e9; font-size: 12px; line-height: 1.6; }
+.webdav-status-badge.success { color: #527848; background: #edf4e6; }
+.webdav-status-badge.running { color: #7b7648; background: #f6f4e6; }
+.webdav-status-badge.error { color: #a65a48; background: #fcf0e9; }
+.webdav-status-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 20px; margin: 18px 0 0; }
+.webdav-status-details > div { min-width: 0; }
+.webdav-status-details dt { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.webdav-status-details dd { margin: 0; color: #58654b; font-size: 13px; line-height: 1.8; }
+.webdav-file-name { overflow-wrap: anywhere; }
+.webdav-backup-status .webdav-time-note { margin-top: 16px; font-size: 11px; }
+@media (max-width: 620px) {
+  .webdav-form-fields, .webdav-status-details { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .webdav-schedule { padding: 15px 12px; margin-top: 18px; }
+  .webdav-connection-actions, .webdav-actions > button { width: 100%; }
+  .webdav-connection-actions > button { flex: 1 1 auto; }
+  .webdav-actions { gap: 10px; }
+  .webdav-settings .webdav-time-field { max-width: none; }
+}

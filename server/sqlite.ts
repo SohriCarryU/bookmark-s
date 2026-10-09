@@ -101,6 +101,20 @@ export function createSqliteDatabase(filename: string): Database & { close(): vo
         throw error
       }
     },
+    async readBatch<T>(statements: Statement[]) {
+      if (!statements.length) return []
+      sqlite.exec('BEGIN')
+      try {
+        // Keep the complete read loop synchronous so requests using this same
+        // connection cannot accidentally join the read transaction.
+        const rows = statements.map(({ sql, params = [] }) => sqlite.prepare(sql).all(...params as SQLInputValue[]) as T[])
+        sqlite.exec('COMMIT')
+        return rows
+      } catch (error) {
+        sqlite.exec('ROLLBACK')
+        throw error
+      }
+    },
     close() { sqlite.close() },
   }
 }

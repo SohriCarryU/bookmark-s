@@ -10,6 +10,8 @@ import { createSqliteDatabase } from './sqlite.js'
 import { createClientIpResolver } from './client-ip.js'
 import { createSiteIconResolver } from './site-icons.js'
 import { createNodeIconFetcher } from './node-icon-fetch.js'
+import { createWebDavBackupService } from './webdav-backup.js'
+import { createNodeWebDavFetcher } from './node-webdav-fetch.js'
 
 const production = process.env.NODE_ENV === 'production'
 const adminPassword = process.env.ADMIN_PASSWORD || (production ? '' : 'bookmark-s-demo')
@@ -20,6 +22,7 @@ if (production && sessionSecret.length < 32) throw new Error('Production require
 const databasePath = resolve(process.env.DB_PATH || 'data/bookmark-s.sqlite')
 mkdirSync(dirname(databasePath), { recursive: true })
 const db = createSqliteDatabase(databasePath)
+const webdav = createWebDavBackupService({ db, sessionSecret, fetcher: createNodeWebDavFetcher() })
 const app = createApp(db, {
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword,
@@ -27,6 +30,7 @@ const app = createApp(db, {
   publicOrigin: process.env.PUBLIC_URL,
   secureCookies: process.env.SECURE_COOKIES === undefined ? production : process.env.SECURE_COOKIES === 'true',
   resolveSiteIcon: createSiteIconResolver(createNodeIconFetcher()),
+  webdav,
   clientIp: c => {
     try { return resolveClientIp(getConnInfo(c).remote.address, c.req.header('x-forwarded-for')) } catch { return 'local' }
   },
@@ -43,10 +47,23 @@ const server = serve({ fetch: app.fetch, port, hostname }, () => {
   if (!production && !process.env.ADMIN_PASSWORD) console.log('Development account: admin / bookmark-s-demo (set ADMIN_PASSWORD for your own instance).')
 })
 let closing = false
+let scheduledBackup: Promise<void> | undefined
+function checkBackups() {
+  if (closing || scheduledBackup) return
+  scheduledBackup = webdav.runScheduled()
+    .then(() => {}, () => console.error('[bookmark-s] Automatic WebDAV backup failed; see site settings for details.'))
+    .finally(() => { scheduledBackup = undefined })
+}
+const backupTimer = setInterval(checkBackups, 60_000)
+backupTimer.unref()
+checkBackups()
 function shutdown() {
   if (closing) return
   closing = true
-  server.close(() => { db.close(); process.exit(0) })
+  clearInterval(backupTimer)
+  server.close(() => {
+    void (async () => { await scheduledBackup; db.close(); process.exit(0) })()
+  })
 }
 process.once('SIGINT', shutdown)
 process.once('SIGTERM', shutdown)

@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { Check, Globe2, LoaderCircle, LockKeyhole, Save, Settings2, ShieldCheck } from "lucide-react";
 import { api, messageOf } from "./api";
 import type { SiteSettings } from "./types";
+import WebDavSettings from "./WebDavSettings";
 import "./settings.css";
 
 type PermissionKey = "allowUserAddBookmarks" | "allowUserPinBookmarks";
@@ -88,7 +89,7 @@ export default function SettingsPage({
     <div className="settings-page">
       <header className="settings-page-heading">
         <span className="settings-heading-icon"><Settings2 size={24} /></span>
-        <div><h1>站点配置</h1><p>设置收藏馆的访问方式，以及普通用户可以使用的功能。</p></div>
+        <div><h1>站点配置</h1><p>管理收藏馆的访问方式、用户权限和数据备份。</p></div>
       </header>
       <section className="settings-card" aria-labelledby={`${id}-mode-heading`}>
         <div className="settings-card-heading">
@@ -142,6 +143,7 @@ export default function SettingsPage({
         <p className="settings-help">两项权限默认关闭。未开启添加权限的用户仍可浏览收藏和提交网站推荐。</p>
         {permissionError && <p className="form-error" role="alert">{permissionError}</p>}
       </section>
+      <WebDavSettings onNotify={onNotify} />
     </div>
   );
 }
