@@ -1,12 +1,13 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { CheckCircle2, Clock3, CloudUpload, FolderSync, LoaderCircle, Save, Unplug, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, CloudUpload, FolderSync, LoaderCircle, Save, TriangleAlert, Unplug, XCircle } from "lucide-react";
 import type { WebDavSettings as Settings, WebDavSettingsInput } from "../shared/webdav";
 import { api, messageOf } from "./api";
 import "./webdav-settings.css";
 
 const path = "/settings/webdav";
+type SettingsForm = Omit<WebDavSettingsInput, "retentionCount"> & { retentionCount: string };
 
-function editable(settings: Settings): WebDavSettingsInput {
+function editable(settings: Settings): SettingsForm {
   return {
     endpointUrl: settings.endpointUrl,
     username: settings.username,
@@ -14,6 +15,7 @@ function editable(settings: Settings): WebDavSettingsInput {
     remoteDirectory: settings.remoteDirectory,
     autoBackupEnabled: settings.autoBackupEnabled,
     backupTime: settings.backupTime,
+    retentionCount: String(settings.retentionCount),
   };
 }
 
@@ -41,7 +43,7 @@ export default function WebDavSettings({ onNotify }: {
   const mounted = useRef(false);
   const formElement = useRef<HTMLFormElement>(null);
   const [saved, setSaved] = useState<Settings | null>(null);
-  const [form, setForm] = useState<WebDavSettingsInput | null>(null);
+  const [form, setForm] = useState<SettingsForm | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [loadVersion, setLoadVersion] = useState(0);
@@ -99,14 +101,14 @@ export default function WebDavSettings({ onNotify }: {
   const dirty = !!saved && !!form && (
     form.endpointUrl !== saved.endpointUrl || form.username !== saved.username || !!form.password ||
     form.remoteDirectory !== saved.remoteDirectory || form.autoBackupEnabled !== saved.autoBackupEnabled ||
-    form.backupTime !== saved.backupTime
+    form.backupTime !== saved.backupTime || form.retentionCount !== String(saved.retentionCount)
   );
   const keepPassword = !!saved?.hasPassword && !!form &&
     form.endpointUrl.trim() === saved.endpointUrl && form.username.trim() === saved.username;
   const running = busy === "backup" || saved?.lastBackup?.status === "running";
   const disabled = !!busy || running;
 
-  function change<K extends keyof WebDavSettingsInput>(key: K, value: WebDavSettingsInput[K]) {
+  function change<K extends keyof SettingsForm>(key: K, value: SettingsForm[K]) {
     setForm((current) => current ? { ...current, [key]: value } : current);
     setActionError("");
     setTestSuccess(false);
@@ -117,6 +119,7 @@ export default function WebDavSettings({ onNotify }: {
       ...form!, endpointUrl: form!.endpointUrl.trim(), username: form!.username.trim(),
       remoteDirectory: form!.remoteDirectory.trim(),
       password: form!.password || undefined,
+      retentionCount: Number(form!.retentionCount),
     };
   }
 
@@ -162,7 +165,11 @@ export default function WebDavSettings({ onNotify }: {
       const result = await api<Settings>(`${path}/backup`, { method: "POST" });
       if (!mounted.current) return;
       setSaved(result);
-      if (result.lastBackup?.status === "success") onNotify("备份已上传到 WebDAV");
+      if (result.lastBackup?.status === "success") {
+        if (result.lastBackup.cleanupWarning) onNotify("备份已上传，旧备份清理未完成", true);
+        else if (result.lastBackup.deletedBackupCount) onNotify(`备份已上传，已清理 ${result.lastBackup.deletedBackupCount} 个旧备份`);
+        else onNotify("备份已上传到 WebDAV");
+      }
       else if (result.lastBackup?.status === "running") onNotify("备份已开始");
     } catch (error) {
       if (!mounted.current) return;
@@ -181,6 +188,7 @@ export default function WebDavSettings({ onNotify }: {
 
   const last = saved?.lastBackup;
   const status = running ? "running" : last?.status;
+  const cleanupWarning = status === "success" ? last?.cleanupWarning : null;
 
   return (
     <section className="settings-card webdav-settings" aria-labelledby={`${id}-heading`}>
@@ -229,6 +237,14 @@ export default function WebDavSettings({ onNotify }: {
                   placeholder="/bookmark-s" required autoComplete="off" spellCheck={false} aria-describedby={`${id}-directory-help`} />
                 <small id={`${id}-directory-help`}>相对于服务地址的目录，不存在时会自动创建。</small>
               </div>
+              <div className="form-field webdav-wide-field">
+                <label htmlFor={`${id}-retention`}>保留备份数量</label>
+                <input id={`${id}-retention`} className="webdav-retention-input" type="number" inputMode="numeric"
+                  value={form.retentionCount} onChange={(event) => change("retentionCount", event.target.value)}
+                  min={0} max={1000} step={1} required aria-describedby={`${id}-retention-help ${id}-retention-scope`} />
+                <small id={`${id}-retention-help`}>例如填 15，成功备份后保留最新 15 份，删除最早的超额备份；0 表示不清理。</small>
+                <small id={`${id}-retention-scope`}>可填 0–1000 的整数。保存后从下一次成功备份生效，仅清理此目录中的 bookmark-s 旧备份。</small>
+              </div>
             </fieldset>
             <div className="webdav-schedule">
               <div className="settings-permission-row">
@@ -274,15 +290,20 @@ export default function WebDavSettings({ onNotify }: {
           <div className="webdav-backup-status" role="region" aria-labelledby={`${id}-status-heading`} aria-live="polite">
             <div className="webdav-status-heading">
               <h3 id={`${id}-status-heading`}>备份状态</h3>
-              <span className={`webdav-status-badge ${status ?? "idle"}`}>
-                {status === "running" ? <LoaderCircle size={14} className="spin" aria-hidden="true" />
+              <span className={`webdav-status-badge ${cleanupWarning ? "warning" : status ?? "idle"}`}>
+                {cleanupWarning ? <TriangleAlert size={14} aria-hidden="true" />
+                  : status === "running" ? <LoaderCircle size={14} className="spin" aria-hidden="true" />
                   : status === "success" ? <CheckCircle2 size={14} aria-hidden="true" />
                     : status === "error" ? <XCircle size={14} aria-hidden="true" /> : <FolderSync size={14} aria-hidden="true" />}
-                {status === "running" ? "正在备份" : status === "success" ? "备份成功" : status === "error" ? "备份失败" : "尚未备份"}
+                {cleanupWarning ? "已上传，清理未完成" : status === "running" ? "正在备份" : status === "success" ? "备份成功" : status === "error" ? "备份失败" : "尚未备份"}
               </span>
             </div>
             {status === "running" && <p className="settings-help">正在上传完整备份，离开此页面不会中断备份。</p>}
             {status === "error" && <p className="form-error webdav-feedback">{last?.error || "备份未完成，请检查连接配置后重试。"}</p>}
+            {cleanupWarning && <div className="webdav-cleanup-warning" role="alert">
+              <TriangleAlert size={17} aria-hidden="true" />
+              <div><strong>备份已上传，旧备份清理未完成</strong><p>{cleanupWarning}</p></div>
+            </div>}
             {pollError && <p className="form-error webdav-feedback" role="alert">{pollError}</p>}
             <dl className="webdav-status-details">
               <div><dt>最近成功备份</dt><dd>{backupDate(saved.lastSuccessAt)}</dd></div>
@@ -290,6 +311,7 @@ export default function WebDavSettings({ onNotify }: {
               {last && <>
                 <div><dt>{last.status === "running" ? "开始时间" : "最近备份时间"}</dt><dd>{backupDate(last.finishedAt ?? last.startedAt)} · {last.trigger === "scheduled" ? "自动" : "手动"}</dd></div>
                 <div><dt>文件大小</dt><dd>{backupSize(last.sizeBytes)}</dd></div>
+                {status === "success" && !!last.deletedBackupCount && <div><dt>已清理旧备份</dt><dd>{last.deletedBackupCount} 个</dd></div>}
                 {last.fileName && <div className="webdav-wide-field"><dt>备份文件</dt><dd className="webdav-file-name">{last.fileName}</dd></div>}
               </>}
             </dl>

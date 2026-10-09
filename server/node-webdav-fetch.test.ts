@@ -104,7 +104,10 @@ test('the Node WebDAV adapter pins DNS while retaining port, TLS verification, a
       const outgoing = new EventEmitter() as EventEmitter & { end(body?: string | Uint8Array): void }
       outgoing.end = body => {
         call.body = body
-        incoming = Object.assign(Readable.from([]), { statusCode: status, headers: { etag: '"new-file"' } })
+        incoming = Object.assign(Readable.from([]), { statusCode: status, headers: {
+          etag: '"new-file"', link: '<https://dav.example.com:8443/dav/?page=2>; rel="next"',
+          'content-range': 'items 0-10/100', 'x-next-page': '2',
+        } })
         queueMicrotask(() => callback(incoming))
       }
       return outgoing
@@ -118,6 +121,9 @@ test('the Node WebDAV adapter pins DNS while retaining port, TLS verification, a
     })
     assert.equal(response.status, 201)
     assert.equal(response.headers.get('etag'), '"new-file"')
+    assert.equal(response.headers.get('link'), '<https://dav.example.com:8443/dav/?page=2>; rel="next"')
+    assert.equal(response.headers.get('content-range'), 'items 0-10/100')
+    assert.equal(response.headers.get('x-next-page'), '2')
     await response.body?.cancel()
     status = 204
     response = await fetcher(new URL('https://dav.example.com:8443/dav/probe.txt'), { ...options(), method: 'DELETE' })

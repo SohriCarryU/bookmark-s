@@ -1,6 +1,7 @@
 .webdav-settings { overflow-wrap: anywhere; }
 .webdav-form-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; min-width: 0; border: 0; padding: 0; margin: 0; }
 .webdav-wide-field { grid-column: 1 / -1; }
+.webdav-settings .form-field input.webdav-retention-input { max-width: 250px; }
 .webdav-schedule { margin-top: 22px; padding: 17px 18px; border: 1px solid #e4ebdc; border-radius: 10px; background: #f7f9f2; }
 .webdav-schedule .settings-permission-row { padding: 0; }
 .webdav-settings .webdav-time-field { max-width: 250px; margin-top: 17px; }
@@ -21,6 +22,12 @@
 .webdav-status-badge.success { color: #527848; background: #edf4e6; }
 .webdav-status-badge.running { color: #7b7648; background: #f6f4e6; }
 .webdav-status-badge.error { color: #a65a48; background: #fcf0e9; }
+.webdav-status-badge.warning { color: #886d31; background: #faf3df; }
+.webdav-cleanup-warning { display: flex; align-items: flex-start; gap: 9px; margin-top: 15px; padding: 12px 13px; border: 1px solid #eadfbe; border-radius: 8px; background: #fcf8ed; color: #886d31; font-size: 13px; line-height: 1.8; }
+.webdav-cleanup-warning > svg { flex-shrink: 0; margin-top: 3px; }
+.webdav-cleanup-warning > div { min-width: 0; }
+.webdav-cleanup-warning strong { font-weight: 500; }
+.webdav-cleanup-warning p { margin: 5px 0 0; font-size: 12px; }
 .webdav-status-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 20px; margin: 18px 0 0; }
 .webdav-status-details > div { min-width: 0; }
 .webdav-status-details dt { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--muted); font-size: 12px; line-height: 1.7; }
@@ -35,5 +42,5 @@
   .webdav-connection-actions, .webdav-actions > button { width: 100%; }
   .webdav-connection-actions > button { flex: 1 1 auto; }
   .webdav-actions { gap: 10px; }
-  .webdav-settings .webdav-time-field { max-width: none; }
+  .webdav-settings .webdav-time-field, .webdav-settings .form-field input.webdav-retention-input { max-width: none; }
 }

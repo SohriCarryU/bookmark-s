@@ -104,6 +104,8 @@ export function createWebDavBackupService(options: Options): WebDavBackupService
       configured: Boolean(config), endpointUrl: config?.endpointUrl ?? '', username: config?.username ?? '',
       hasPassword: Boolean(config?.passwordCipher), remoteDirectory: config?.remoteDirectory ?? '/bookmark-s',
       autoBackupEnabled: config?.autoBackupEnabled ?? false, backupTime: config?.backupTime ?? '03:00', timeZone: 'Asia/Shanghai',
+      // Existing installations keep their history until an administrator opts in.
+      retentionCount: config ? (config.retentionCount ?? 0) : 15,
       nextBackupAt: config?.autoBackupEnabled ? new Date(Math.max(lastSlot + DAY, latestSlot(timestamp, config.backupTime))).toISOString() : null,
       lastSuccessAt: current.state?.lastSuccessAt ?? null, lastBackup,
     }
@@ -129,6 +131,17 @@ export function createWebDavBackupService(options: Options): WebDavBackupService
     if (!lease) throw new ApiError('备份任务已过期，请重新执行。', 409)
   }
 
+  async function renewLease(token: string) {
+    const timestamp = now().getTime()
+    // Upload and cleanup each have a bounded request budget. Give cleanup its
+    // own full lease window, without reviving an expired or superseded task.
+    const renewed = await db.get(`UPDATE settings SET value = json_set(value, '$.expiresAt', ?)
+      WHERE key = ? AND json_extract(value,'$.token') = ?
+        AND CAST(json_extract(value,'$.expiresAt') AS INTEGER) > ?
+      RETURNING value`, [timestamp + LEASE_MS, LOCK_KEY, token, timestamp])
+    if (!renewed) throw new ApiError('备份任务已过期，请重新执行。', 409)
+  }
+
   async function commit(token: string, entries: [string, unknown][]) {
     const timestamp = now().getTime()
     const statements: Statement[] = entries.map(([key, value]) => ({
@@ -146,13 +159,17 @@ export function createWebDavBackupService(options: Options): WebDavBackupService
   async function connection(input: unknown, previous?: StoredConfig): Promise<{ input: WebDavSettingsInput; connection: WebDavConnection }> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError('请填写 WebDAV 配置。')
     const body = input as Record<string, unknown>
-    const fields = ['endpointUrl', 'username', 'password', 'remoteDirectory', 'autoBackupEnabled', 'backupTime']
+    const fields = ['endpointUrl', 'username', 'password', 'remoteDirectory', 'autoBackupEnabled', 'backupTime', 'retentionCount']
     if (Object.keys(body).some(field => !fields.includes(field))) throw new ApiError('WebDAV 配置包含不支持的字段。')
     if (typeof body.endpointUrl !== 'string' || typeof body.remoteDirectory !== 'string') throw new ApiError('请填写 WebDAV 地址和备份目录。')
     if (typeof body.username !== 'string' || !body.username.trim() || body.username.length > 255 || /[:\u0000-\u001f\u007f]/.test(body.username)) throw new ApiError('请填写有效的 WebDAV 用户名。')
     if (body.password !== undefined && (typeof body.password !== 'string' || body.password.length > 2048 || /[\u0000-\u001f\u007f]/.test(body.password))) throw new ApiError('WebDAV 密码格式无效。')
     if (typeof body.autoBackupEnabled !== 'boolean') throw new ApiError('请选择是否开启每日自动备份。')
     if (typeof body.backupTime !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(body.backupTime)) throw new ApiError('请选择有效的每日备份时间。')
+    if (body.retentionCount !== undefined && (typeof body.retentionCount !== 'number' || !Number.isInteger(body.retentionCount) || body.retentionCount < 0 || body.retentionCount > 1000)) {
+      throw new ApiError('保留备份数量必须为 0 到 1000 的整数，0 表示不自动清理。')
+    }
+    const retentionCount = body.retentionCount === undefined ? (previous?.retentionCount ?? 0) : body.retentionCount as number
     let endpointUrl: string
     let remoteDirectory: string
     try {
@@ -169,7 +186,7 @@ export function createWebDavBackupService(options: Options): WebDavBackupService
       password = await decrypt(previous)
     }
     return {
-      input: { endpointUrl, username, remoteDirectory, autoBackupEnabled: body.autoBackupEnabled, backupTime: body.backupTime },
+      input: { endpointUrl, username, remoteDirectory, autoBackupEnabled: body.autoBackupEnabled, backupTime: body.backupTime, retentionCount },
       connection: { endpointUrl, username, password, remoteDirectory },
     }
   }
@@ -210,17 +227,34 @@ export function createWebDavBackupService(options: Options): WebDavBackupService
     const startedAt = now()
     const state: StoredState = {
       lastSuccessAt: current.state?.lastSuccessAt ?? null,
-      lastBackup: { status: 'running', trigger, startedAt: startedAt.toISOString(), finishedAt: null, fileName: null, sizeBytes: null, error: null },
+      lastBackup: { status: 'running', trigger, startedAt: startedAt.toISOString(), finishedAt: null, fileName: null, sizeBytes: null, error: null, cleanupWarning: null, deletedBackupCount: 0 },
     }
     await writeState(token, state)
     const result = state.lastBackup!
     try {
       const password = await decrypt(current.config)
+      const remote = { endpointUrl: current.config.endpointUrl, username: current.config.username, remoteDirectory: current.config.remoteDirectory, password }
       const backup = await exportBackup(db, startedAt)
       result.fileName = `bookmark-s-${startedAt.toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID().slice(0, 8)}.sql`
       result.sizeBytes = backup.bytes.byteLength
       await assertLease(token)
-      await client.upload({ endpointUrl: current.config.endpointUrl, username: current.config.username, remoteDirectory: current.config.remoteDirectory, password }, result.fileName, backup.bytes)
+      await client.upload(remote, result.fileName, backup.bytes)
+      await assertLease(token)
+      const retentionCount = current.config.retentionCount ?? 0
+      if (retentionCount > 0) {
+        await renewLease(token)
+        try {
+          const cleanup = await client.pruneBackups(remote, retentionCount, result.fileName, () => assertLease(token))
+          result.cleanupWarning = cleanup.warning
+          result.deletedBackupCount = cleanup.deletedCount
+        } catch (error) {
+          // A failed cleanup does not invalidate the uploaded backup. A lost
+          // lease must still stop the task and fence off any stale state write.
+          if (error instanceof ApiError && error.status === 409) throw error
+          await assertLease(token)
+          result.cleanupWarning = '备份已上传，但清理旧备份未完成，请检查 WebDAV 服务后重试。'
+        }
+      }
       await assertLease(token)
       result.status = 'success'
       result.finishedAt = now().toISOString()

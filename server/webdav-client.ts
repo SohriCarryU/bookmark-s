@@ -1,4 +1,7 @@
 import { publicIconUrl } from '../shared/site-icons.js'
+import { MAX_WEBDAV_LIST_BYTES, planWebDavBackupDeletion, webDavListingIsPartial, WebDavRetentionError, type WebDavPruneResult } from './webdav-retention.js'
+
+export type { WebDavPruneResult } from './webdav-retention.js'
 
 export interface WebDavConnection {
   endpointUrl: string
@@ -18,6 +21,7 @@ export type WebDavFetcher = (url: URL, init: {
 export interface WebDavClient {
   testConnection(connection: WebDavConnection): Promise<void>
   upload(connection: WebDavConnection, filename: string, bytes: Uint8Array): Promise<void>
+  pruneBackups(connection: WebDavConnection, retentionCount: number, protectedFilename: string, beforeDelete: () => Promise<void>): Promise<WebDavPruneResult>
 }
 
 interface ClientOptions {
@@ -129,23 +133,23 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   })
 }
 
-async function readXml(response: Response, signal: AbortSignal): Promise<string> {
+async function readXml(response: Response, signal: AbortSignal, maxBytes: number): Promise<string> {
   const length = Number(response.headers.get('content-length'))
-  if (length > MAX_RESPONSE_BYTES) {
+  if (length > maxBytes) {
     discard(response)
     throw new WebDavError('WebDAV 响应过大，无法确认备份目录。')
   }
   if (!response.body) throw new WebDavError('WebDAV 返回了无效的目录信息。')
   const reader = response.body.getReader()
   let size = 0
-  const decoder = new TextDecoder()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
   let text = ''
   try {
     while (true) {
       const item = await abortable(reader.read(), signal)
       if (item.done) break
       size += item.value.byteLength
-      if (size > MAX_RESPONSE_BYTES) throw new WebDavError('WebDAV 响应过大，无法确认备份目录。')
+      if (size > maxBytes) throw new WebDavError('WebDAV 响应过大，无法确认备份目录。')
       text += decoder.decode(item.value, { stream: true })
     }
     return text + decoder.decode()
@@ -182,7 +186,7 @@ export function createWebDavClient(fetcher: WebDavFetcher, options: ClientOption
     const auth = authorization(connection)
     const deadline = Date.now() + operationTimeoutMs
 
-    async function request(url: URL, method: string, extra: Record<string, string> = {}, body?: Uint8Array | string): Promise<DavResponse> {
+    async function request(url: URL, method: string, extra: Record<string, string> = {}, body?: Uint8Array | string, maxResponseBytes = MAX_RESPONSE_BYTES): Promise<DavResponse> {
       const remaining = Math.min(requestTimeoutMs, deadline - Date.now())
       if (remaining <= 0) throw new WebDavError('WebDAV 请求超时，请稍后重试。')
       const controller = new AbortController()
@@ -198,7 +202,7 @@ export function createWebDavClient(fetcher: WebDavFetcher, options: ClientOption
           discard(response)
           throw statusError(302)
         }
-        const xml = method === 'PROPFIND' && response.status === 207 ? await readXml(response, controller.signal) : undefined
+        const xml = method === 'PROPFIND' && response.status === 207 ? await readXml(response, controller.signal, maxResponseBytes) : undefined
         if (xml === undefined) discard(response)
         return { status: response.status, headers: response.headers, xml }
       } catch (error) {
@@ -243,7 +247,9 @@ export function createWebDavClient(fetcher: WebDavFetcher, options: ClientOption
       return { url, etag: response.headers.get('etag') }
     }
 
-    return { prepareDirectory, createFile, request }
+    const directoryUrl = new URL(endpoint)
+    for (const segment of directory.split('/').filter(Boolean)) directoryUrl.pathname += `${encodeURIComponent(segment)}/`
+    return { prepareDirectory, createFile, request, directoryUrl }
   }
 
   return {
@@ -268,6 +274,38 @@ export function createWebDavClient(fetcher: WebDavFetcher, options: ClientOption
       const dav = operation(connection)
       const directory = await dav.prepareDirectory()
       await dav.createFile(directory, filename, bytes, 'application/sql; charset=utf-8')
+    },
+    async pruneBackups(connection, retentionCount, protectedFilename, beforeDelete) {
+      if (!Number.isInteger(retentionCount) || retentionCount < 0 || retentionCount > 1000) throw new WebDavError('备份保留数量必须是 0 到 1000 之间的整数。')
+      if (retentionCount === 0) return { deletedCount: 0, warning: null }
+      let dav: ReturnType<typeof operation>
+      let deletions: ReturnType<typeof planWebDavBackupDeletion>
+      try {
+        dav = operation(connection)
+        const response = await dav.request(dav.directoryUrl, 'PROPFIND', { Depth: '1', 'Content-Type': 'application/xml; charset=utf-8' },
+          '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>', MAX_WEBDAV_LIST_BYTES)
+        if (response.status !== 207 || webDavListingIsPartial(response.headers)) {
+          return { deletedCount: 0, warning: 'WebDAV 未返回完整的备份目录列表，已跳过旧备份清理。' }
+        }
+        deletions = planWebDavBackupDeletion(response.xml ?? '', dav.directoryUrl, retentionCount, protectedFilename)
+      } catch (error) {
+        return { deletedCount: 0, warning: error instanceof WebDavRetentionError ? error.message : '无法读取 WebDAV 备份目录，已跳过旧备份清理，请检查网络和目录权限。' }
+      }
+      let deletedCount = 0
+      for (const deletion of deletions) {
+        // The caller owns the durable lease. Its failure is not a networking
+        // warning: propagate it immediately without issuing another DELETE.
+        await beforeDelete()
+        try {
+          const response = await dav.request(deletion.url, 'DELETE', { 'If-Match': deletion.etag })
+          if (response.status === 404) continue
+          if (response.status !== 200 && response.status !== 204) throw statusError(response.status)
+          deletedCount++
+        } catch {
+          return { deletedCount, warning: '旧备份清理未完成，已停止继续删除；请检查文件是否被修改、删除权限及网络连接。' }
+        }
+      }
+      return { deletedCount, warning: null }
     },
   }
 }

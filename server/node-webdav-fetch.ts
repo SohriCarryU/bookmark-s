@@ -46,7 +46,7 @@ function connectPinned(url: URL, address: ResolvedAddress, options: FetchOptions
     }, incoming => {
       try {
         const responseHeaders = new Headers()
-        for (const name of ['content-type', 'content-length', 'location', 'etag']) {
+        for (const name of ['content-type', 'content-length', 'location', 'etag', 'link', 'content-range', 'x-next-page', 'x-next-marker', 'x-next-token']) {
           const value = incoming.headers[name]
           if (typeof value === 'string') responseHeaders.set(name, value)
         }

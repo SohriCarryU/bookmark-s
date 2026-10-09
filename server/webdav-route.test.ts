@@ -6,16 +6,25 @@ import { createWebDavBackupService } from './webdav-backup.js'
 
 const input = {
   endpointUrl: 'https://dav.example.com/dav/', username: 'backup-admin', password: 'test-backup-credential',
-  remoteDirectory: '/bookmark-s', autoBackupEnabled: true, backupTime: '03:00',
+  remoteDirectory: '/bookmark-s', autoBackupEnabled: true, backupTime: '03:00', retentionCount: 15,
 }
-function setup() {
+function setup(cleanupWarning: string | null = null) {
   const db = createSqliteDatabase(':memory:')
   const uploads: string[] = []
+  const prunes: number[] = []
   let probes = 0
   const sessionSecret = 'webdav-route-test-session-secret-at-least-32-characters'
   const webdav = createWebDavBackupService({
     db, sessionSecret,
-    client: { async testConnection() { probes++ }, async upload(connection) { uploads.push(connection.endpointUrl) } },
+    client: {
+      async testConnection() { probes++ },
+      async upload(connection) { uploads.push(connection.endpointUrl) },
+      async pruneBackups(_connection, count, _filename, beforeDelete) {
+        await beforeDelete()
+        prunes.push(count)
+        return { deletedCount: 2, warning: cleanupWarning }
+      },
+    },
   })
   const app = createApp(db, { adminUsername: 'admin', adminPassword: 'bookmark-s-demo', sessionSecret, secureCookies: false, webdav })
   const request = (path: string, method = 'GET', body?: unknown, cookie?: string, headers: Record<string, string> = {}) => app.request(`http://localhost${path}`, {
@@ -27,7 +36,7 @@ function setup() {
     assert.equal(response.status, 200)
     return response.headers.get('set-cookie')!.split(';')[0]
   }
-  return { db, app, webdav, request, login, uploads, probes: () => probes }
+  return { db, app, webdav, request, login, uploads, prunes, probes: () => probes }
 }
 
 test('only administrators can read, configure, test, or run WebDAV backups in public and private modes', async t => {
@@ -70,7 +79,7 @@ test('public settings responses stay unchanged and WebDAV writes reject cross-si
 })
 
 test('test uses submitted input without saving, while backup uses saved settings and limits repeated uploads', async t => {
-  const { db, request, login, webdav, uploads, probes } = setup()
+  const { db, request, login, webdav, uploads, prunes, probes } = setup()
   t.after(() => db.close())
   const admin = await login()
   assert.equal((await request('/api/settings/webdav/backup', 'POST', undefined, admin)).status, 400)
@@ -78,15 +87,48 @@ test('test uses submitted input without saving, while backup uses saved settings
   assert.equal(probes(), 1)
   assert.equal((await webdav.getSettings()).configured, false)
   assert.equal((await request('/api/settings/webdav', 'PUT', input, admin)).status, 200)
+  assert.deepEqual(prunes, [])
   for (let i = 0; i < 2; i++) {
-    const response = await request('/api/settings/webdav/backup?endpointUrl=https://other.example.com', 'POST', { endpointUrl: 'https://other.example.com/' }, admin)
+    const response = await request('/api/settings/webdav/backup?endpointUrl=https://other.example.com&retentionCount=1', 'POST', { endpointUrl: 'https://other.example.com/', retentionCount: 1 }, admin)
     assert.equal(response.status, 200)
     assert.equal((await response.json()).lastBackup.status, 'success')
   }
   assert.deepEqual(uploads, [input.endpointUrl, input.endpointUrl])
+  assert.deepEqual(prunes, [15, 15])
   const limited = await request('/api/settings/webdav/backup', 'POST', undefined, admin)
   assert.equal(limited.status, 429)
   assert.ok(limited.headers.get('retry-after'))
+})
+
+test('retention is validated and persisted through the admin API, with cleanup warnings returned as upload success', async t => {
+  const warning = '旧备份清理未完成，请检查删除权限。'
+  const { db, request, login, uploads, prunes } = setup(warning)
+  t.after(() => db.close())
+  const admin = await login()
+  const initial = await request('/api/settings/webdav', 'GET', undefined, admin)
+  assert.equal((await initial.json()).retentionCount, 15)
+  assert.equal((await request('/api/settings/webdav', 'PUT', input, admin)).status, 200)
+  for (const retentionCount of [null, '15', 1.2, -1, 1001]) {
+    const response = await request('/api/settings/webdav', 'PUT', { ...input, password: '', retentionCount }, admin)
+    assert.equal(response.status, 400)
+  }
+  const saved = await request('/api/settings/webdav', 'GET', undefined, admin)
+  assert.equal((await saved.json()).retentionCount, 15)
+  assert.deepEqual(prunes, [])
+  const response = await request('/api/settings/webdav/backup', 'POST', undefined, admin)
+  assert.equal(response.status, 200)
+  const completed = await response.json()
+  assert.equal(completed.lastBackup.status, 'success')
+  assert.equal(completed.lastBackup.error, null)
+  assert.equal(completed.lastBackup.cleanupWarning, warning)
+  assert.equal(completed.lastBackup.deletedBackupCount, 2)
+  assert.equal(completed.lastSuccessAt, completed.lastBackup.finishedAt)
+  assert.equal(uploads.length, 1)
+  assert.deepEqual(prunes, [15])
+  assert.equal((await request('/api/settings/webdav', 'PUT', { ...input, password: '', retentionCount: 0 }, admin)).status, 200)
+  assert.equal((await request('/api/settings/webdav/backup', 'POST', undefined, admin)).status, 200)
+  assert.equal(uploads.length, 2)
+  assert.deepEqual(prunes, [15])
 })
 
 test('malformed JSON returns a safe validation error without exposing request contents', async t => {

@@ -7,6 +7,8 @@ export interface WebDavSettingsInput {
   autoBackupEnabled: boolean
   /** HH:mm in Asia/Shanghai. */
   backupTime: string
+  /** Zero keeps every backup. Omission preserves the existing policy for older clients. */
+  retentionCount?: number
 }
 
 export interface WebDavBackupResult {
@@ -17,6 +19,9 @@ export interface WebDavBackupResult {
   fileName: string | null
   sizeBytes: number | null
   error: string | null
+  /** Upload succeeded, but old backups could not all be pruned. */
+  cleanupWarning?: string | null
+  deletedBackupCount?: number
 }
 
 export interface WebDavSettings {
@@ -27,6 +32,7 @@ export interface WebDavSettings {
   remoteDirectory: string
   autoBackupEnabled: boolean
   backupTime: string
+  retentionCount: number
   timeZone: 'Asia/Shanghai'
   nextBackupAt: string | null
   lastSuccessAt: string | null
