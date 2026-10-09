@@ -45,3 +45,19 @@ export function siteIconFallbackUrls(rawOrigin: string): string[] {
     `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`,
   ]
 }
+
+/** A stable cache revision, never an authorization token or a disclosure of a custom URL's query. */
+export function siteIconCacheVersion(rawUrl: string, options: { allowFallback: boolean; iconUrl?: string | null }): string | undefined {
+  const origin = siteIconOrigin(rawUrl)
+  const custom = options.iconUrl ? customSiteIconUrl(options.iconUrl) : undefined
+  if (!origin && !custom) return undefined
+  let revision = 'auto'
+  if (custom) {
+    let hash = 0xcbf29ce484222325n
+    for (let index = 0; index < custom.href.length; index++) {
+      hash = BigInt.asUintN(64, (hash ^ BigInt(custom.href.charCodeAt(index))) * 0x100000001b3n)
+    }
+    revision = hash.toString(36)
+  }
+  return `${origin ?? 'custom'}|${options.allowFallback ? 'public' : 'private'}|${revision}`
+}

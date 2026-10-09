@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword } from './password.js'
 import { ApiError } from './errors.js'
 import { auditedMutation, listOperations, operationDetail, revertOperation } from './audit.js'
 import { RateLimiter, RateLimitError } from './rate-limit.js'
-import { customSiteIconUrl, siteIconOrigin } from '../shared/site-icons.js'
+import { customSiteIconUrl, siteIconCacheVersion, siteIconOrigin } from '../shared/site-icons.js'
 import type { SiteIconResolver } from './site-icons.js'
 import type { WebDavBackupService } from './webdav-backup.js'
 import type { S3BackupService } from './s3-backup.js'
@@ -387,7 +387,7 @@ export function createApp(db: Database, config: AppConfig) {
     return { blockedTagIds, tags }
   }
 
-  app.use('/api/*', bodyLimit({ maxSize: 16 * 1024, onError: c => c.json({ error: '提交内容过大，请缩短后重试' }, 413) }))
+  app.use('/api/*', bodyLimit({ maxSize: 16 * 1024, onError: c => c.json({ error: '提交内容过大，请缩短后重试' }, 413, { 'Cache-Control': 'no-store' }) }))
   app.use('/api/*', async (c, next) => {
     c.header('Cache-Control', 'no-store')
     c.header('X-Content-Type-Options', 'nosniff')
@@ -459,11 +459,16 @@ export function createApp(db: Database, config: AppConfig) {
         WHERE bt.bookmark_id = bookmarks.id AND ub.user_id = ?)`, [c.req.param('id'), user?.id ?? ''])
     if (!bookmark || (!siteIconOrigin(bookmark.url) && !customSiteIconUrl(bookmark.iconUrl ?? '')) || !config.resolveSiteIcon) throw new ApiError('暂无可用的网站图标', 404)
     if (!c.get('settings').cacheSiteIcons) throw new ApiError('服务器图标缓存已关闭', 404)
-    const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: c.get('settings').siteMode === 'public', iconUrl: bookmark.iconUrl })
+    const publicMode = c.get('settings').siteMode === 'public'
+    const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: publicMode, iconUrl: bookmark.iconUrl })
     if (!icon) throw new ApiError('暂无可用的网站图标', 404)
-    // Keep authorization effective on every request, including after logout or
-    // a switch to private mode. Upstream bytes are cached inside the resolver.
-    c.header('Cache-Control', 'no-store')
+    // Old/unversioned URLs must not retain a newer image under a stale cache key.
+    const version = siteIconCacheVersion(bookmark.url, { allowFallback: publicMode, iconUrl: bookmark.iconUrl })
+    const cacheable = publicMode && version !== undefined && c.req.query('v') === version
+    // Only public images may be reused locally; shared caches must not retain them.
+    // Cookie changes select a new entry, but already cached public bytes cannot be revoked.
+    c.header('Cache-Control', cacheable ? 'private, max-age=86400, immutable' : 'no-store')
+    c.header('Vary', 'Cookie', { append: true })
     c.header('Content-Type', icon.contentType)
     c.header('Cross-Origin-Resource-Policy', 'same-origin')
     c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox")
@@ -974,6 +979,7 @@ export function createApp(db: Database, config: AppConfig) {
   app.all('/api/*', c => c.json({ error: '找不到这个接口' }, 404))
   app.notFound(c => c.json({ error: '找不到这个接口' }, 404))
   app.onError((error, c) => {
+    c.header('Cache-Control', 'no-store')
     if (error instanceof RateLimitError) c.header('Retry-After', String(error.retryAfter))
     if (error instanceof ApiError) return c.json({ error: error.message }, error.status)
     if (error.message.includes('BOOKMARK_TAG_LIMIT')) return c.json({ error: '每个书签最多 12 个标签' }, 400)

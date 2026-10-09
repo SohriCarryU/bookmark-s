@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createSiteIconResolver, type SiteIconFetcher } from './site-icons.js'
-import { customSiteIconUrl, siteIconFallbackUrls } from '../shared/site-icons.js'
+import { customSiteIconUrl, siteIconCacheVersion, siteIconFallbackUrls } from '../shared/site-icons.js'
 
 const PNG = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64'))
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#45643b" d="M0 0h16v16H0z"/></svg>'
@@ -249,6 +249,19 @@ test('shared fallbacks use only a safe normalized hostname, never bookmark paths
   for (const raw of ['http://localhost/private', 'https://127.0.0.1/', 'https://user:secret@icons.example.com/private', 'file:///etc/passwd']) {
     assert.deepEqual(siteIconFallbackUrls(raw), [], raw)
   }
+})
+
+test('shared cache versions preserve the existing format and separate icon URLs and privacy without exposing private paths', () => {
+  assert.equal(siteIconCacheVersion(ORIGIN + '/private?token=secret', { allowFallback: true }), ORIGIN + '|public|auto')
+  assert.equal(siteIconCacheVersion('http://icons.example.com/another', { allowFallback: false, iconUrl: null }), ORIGIN + '|private|auto')
+  const expected = ORIGIN + '|public|2i6xspf7f8ldz'
+  assert.equal(siteIconCacheVersion(ORIGIN, { allowFallback: true, iconUrl: CUSTOM }), expected)
+  assert.equal(siteIconCacheVersion(ORIGIN + '/private?token=secret', { allowFallback: true, iconUrl: CUSTOM + '#preview' }), expected)
+  assert.notEqual(siteIconCacheVersion(ORIGIN, { allowFallback: true, iconUrl: CUSTOM + '&variant=new' }), expected)
+  assert.equal(siteIconCacheVersion('http://router.local/private', { allowFallback: true, iconUrl: CUSTOM }), 'custom|public|2i6xspf7f8ldz')
+  assert.equal(siteIconCacheVersion(ORIGIN, { allowFallback: true, iconUrl: 'http://cdn.example.com/icon.png' }), ORIGIN + '|public|auto')
+  assert.equal(siteIconCacheVersion('http://router.local/private', { allowFallback: true }), undefined)
+  assert.equal(siteIconCacheVersion('not a url', { allowFallback: false, iconUrl: 'http://cdn.example.com/icon.png' }), undefined)
 })
 
 test('a valid custom image wins before homepage discovery in both public and private modes', async () => {
