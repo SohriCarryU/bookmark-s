@@ -8,6 +8,8 @@ import { getConnInfo } from '@hono/node-server/conninfo'
 import { createApp } from './app.js'
 import { createSqliteDatabase } from './sqlite.js'
 import { createClientIpResolver } from './client-ip.js'
+import { createSiteIconResolver } from './site-icons.js'
+import { createNodeIconFetcher } from './node-icon-fetch.js'
 
 const production = process.env.NODE_ENV === 'production'
 const adminPassword = process.env.ADMIN_PASSWORD || (production ? '' : 'bookmark-s-demo')
@@ -24,6 +26,7 @@ const app = createApp(db, {
   sessionSecret,
   publicOrigin: process.env.PUBLIC_URL,
   secureCookies: process.env.SECURE_COOKIES === undefined ? production : process.env.SECURE_COOKIES === 'true',
+  resolveSiteIcon: createSiteIconResolver(createNodeIconFetcher()),
   clientIp: c => {
     try { return resolveClientIp(getConnInfo(c).remote.address, c.req.header('x-forwarded-for')) } catch { return 'local' }
   },

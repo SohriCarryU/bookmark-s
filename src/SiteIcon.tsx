@@ -1,28 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { siteIconOrigin } from "../shared/site-icons";
 import type { Bookmark } from "./types";
 import "./site-icons.css";
 
-type IconBookmark = Pick<Bookmark, "title" | "url">;
-const localSuffixes = ["localhost", "local", "lan", "internal", "home", "home.arpa", "test", "example", "invalid", "onion"];
-
-function iconSources(rawUrl: string, allowFallback: boolean): string[] {
-  try {
-    const url = new URL(rawUrl);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return [];
-    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-    // Only public-looking DNS names: no IP literals, local names or reserved test domains.
-    if (hostname.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)
-      || localSuffixes.some(suffix => hostname === suffix || hostname.endsWith(`.${suffix}`))) return [];
-    // Icons never include a bookmark's private path, query string or fragment.
-    // HTTPS also avoids mixed-content requests when the saved website URL uses HTTP.
-    const originIcon = new URL("/favicon.ico", url);
-    originIcon.protocol = "https:";
-    originIcon.hostname = hostname;
-    return [originIcon.href, ...(allowFallback ? [`https://icons.duckduckgo.com/ip3/${encodeURIComponent(hostname)}.ico`] : [])];
-  } catch {
-    return [];
-  }
-}
+type IconBookmark = Pick<Bookmark, "id" | "title" | "url">;
 
 function placeholder(title: string) {
   const name = title.toLowerCase();
@@ -31,17 +12,16 @@ function placeholder(title: string) {
       : Array.from(title)[0]?.toUpperCase() || "?";
 }
 
-function IconImage({ bookmark, large, sources }: { bookmark: IconBookmark; large: boolean; sources: string[] }) {
+function IconImage({ bookmark, large, source }: { bookmark: IconBookmark; large: boolean; source: string | undefined }) {
   const container = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
-  const [attempt, setAttempt] = useState({ index: 0, loaded: false });
-  const source = sources[attempt.index];
+  const [status, setStatus] = useState<"pending" | "loaded" | "failed">("pending");
   const color = ["sage", "blue", "peach", "lavender", "rose", "yellow"][
     Array.from(bookmark.title).reduce((sum, char) => sum + char.charCodeAt(0), 0) % 6
   ];
 
   useEffect(() => {
-    if (!sources.length) return;
+    if (!source) return;
     if (!("IntersectionObserver" in window)) {
       setVisible(true);
       return;
@@ -54,28 +34,27 @@ function IconImage({ bookmark, large, sources }: { bookmark: IconBookmark; large
     }, { rootMargin: "240px" });
     if (container.current) observer.observe(container.current);
     return () => observer.disconnect();
-  }, [sources]);
+  }, [source]);
 
   useEffect(() => {
-    if (!visible || !source || attempt.loaded) return;
+    if (!visible || !source || status !== "pending") return;
+    // The server may spend up to 12 seconds discovering and validating a site's icon.
     const timeout = window.setTimeout(() => {
-      setAttempt(current => current.index === attempt.index && !current.loaded
-        ? { index: current.index + 1, loaded: false } : current);
-    }, 5000);
+      setStatus(current => current === "pending" ? "failed" : current);
+    }, 18_000);
     return () => window.clearTimeout(timeout);
-  }, [visible, source, attempt.index, attempt.loaded]);
+  }, [visible, source, status]);
 
   function finish(loaded: boolean) {
-    // An old image may finish after its timeout or after the next source started.
-    setAttempt(current => current.index === attempt.index
-      ? { index: current.index + (loaded ? 0 : 1), loaded } : current);
+    // A late response must not revive an image after its deadline has expired.
+    setStatus(current => current === "pending" ? loaded ? "loaded" : "failed" : current);
   }
 
   return <span ref={container} aria-hidden="true" className={`site-icon site-${color}${large ? " site-icon-large" : ""}`}>
-    {!attempt.loaded && <span className="site-icon-fallback">{placeholder(bookmark.title)}</span>}
-    {visible && source && <img
+    {status !== "loaded" && <span className="site-icon-fallback">{placeholder(bookmark.title)}</span>}
+    {visible && source && status !== "failed" && <img
       key={source}
-      className={`site-icon-image${attempt.loaded ? " is-loaded" : ""}`}
+      className={`site-icon-image${status === "loaded" ? " is-loaded" : ""}`}
       src={source}
       alt=""
       width={32}
@@ -93,7 +72,14 @@ export default function SiteIcon({ bookmark, large = false, allowFallback = fals
   large?: boolean;
   allowFallback?: boolean;
 }) {
-  const sources = useMemo(() => iconSources(bookmark.url, allowFallback), [bookmark.url, allowFallback]);
+  const source = useMemo(() => {
+    const origin = siteIconOrigin(bookmark.url);
+    if (!origin) return undefined;
+    // This is only a browser cache version. The server reads the saved bookmark URL
+    // and the actual site mode; paths, query strings and permission flags stay out.
+    const version = `${origin}|${allowFallback ? "public" : "private"}`;
+    return `/api/bookmarks/${encodeURIComponent(bookmark.id)}/icon?v=${encodeURIComponent(version)}`;
+  }, [bookmark.id, bookmark.url, allowFallback]);
   // Changing websites or privacy mode resets both loading state and pending timers.
-  return <IconImage key={sources.join("\n")} bookmark={bookmark} large={large} sources={sources} />;
+  return <IconImage key={source} bookmark={bookmark} large={large} source={source} />;
 }

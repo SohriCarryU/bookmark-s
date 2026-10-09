@@ -1,5 +1,6 @@
 import { createApp } from '../server/app.js'
 import { createD1Database, type D1Binding } from '../server/db.js'
+import { createSiteIconResolver } from '../server/site-icons.js'
 
 interface Env {
   DB: D1Binding
@@ -28,6 +29,12 @@ export default {
         sessionSecret: env.SESSION_SECRET,
         publicOrigin: env.PUBLIC_URL,
         secureCookies: env.SECURE_COOKIES === undefined ? undefined : env.SECURE_COOKIES === 'true',
+        // Workers' native public-network fetch does not use Node's socket/DNS
+        // adapter. Every redirect remains subject to the resolver's URL policy.
+        resolveSiteIcon: createSiteIconResolver((url, { signal, accept }) => fetch(url.href, {
+          method: 'GET', redirect: 'manual', credentials: 'omit', signal,
+          headers: { Accept: accept, 'User-Agent': 'bookmark-s/1.0 (website icons)' },
+        })),
         // Cloudflare supplies this header; generic API/Node callers never trust it.
         clientIp: c => c.req.header('cf-connecting-ip') || 'local',
       }),

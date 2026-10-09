@@ -6,11 +6,11 @@ type ImageRoute = {
   fulfill(response: { status?: number; contentType: string; body: string }): Promise<void>;
 };
 const member: User = { id: 'icon-reader', username: 'reader', role: 'user', canAddBookmarks: false, canPinBookmarks: false, isOwner: false };
-const favicon = (host: string) => `https://${host}/favicon.ico`;
-const backup = (host: string) => `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`;
 const imageBody = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" rx="3" fill="#45643b"/></svg>';
 const serveImage = (route: ImageRoute) => route.fulfill({ contentType: 'image/svg+xml', body: imageBody });
-const missingImage = (route: ImageRoute) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'No icon' });
+const missingImage = (route: ImageRoute, status = 404) => route.fulfill({
+  status, contentType: 'application/json', body: JSON.stringify({ error: 'Icon unavailable' }),
+});
 
 function bookmark(id: string, url: string, title = id): Bookmark {
   return { id, url, title, description: 'Site icon fixture', categoryId: 'development', categoryIds: ['development'],
@@ -25,6 +25,10 @@ function collection(bookmarks: Bookmark[], siteMode: Bootstrap['siteMode'] = 'pu
 function iconFor(page: Page, title: string) {
   return page.locator('.bookmark-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) }).locator('.site-icon');
 }
+function requestedBookmarkId(url: string) {
+  const match = new URL(url).pathname.match(/^\/api\/bookmarks\/([^/]+)\/icon$/);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
 async function rendered(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
@@ -34,9 +38,9 @@ async function refresh(page: Page) {
   await response;
   await rendered(page);
 }
-async function expectLoaded(icon: Locator, source: string) {
+async function expectLoaded(icon: Locator, source?: string) {
   const image = icon.locator('img.site-icon-image');
-  await expect(image).toHaveAttribute('src', source);
+  if (source) await expect(image).toHaveJSProperty('src', source);
   await expect(image).toHaveClass(/\bis-loaded\b/);
   await expect(image).toBeVisible();
   expect(await image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(16);
@@ -44,14 +48,13 @@ async function expectLoaded(icon: Locator, source: string) {
 }
 async function mockCollection(page: Page, getData: () => Bootstrap, respond: (route: ImageRoute) => Promise<void>) {
   const requests: { url: string; referer: string | undefined }[] = [];
+  const externalRequests: string[] = [];
   const appOrigin = new URL(test.info().project.use.baseURL!).origin;
   const appIcon = new URL('/favicon.svg', appOrigin).href;
   const client = await page.context().newCDPSession(page);
-  // Avoid network cache hits; Chromium can still reuse decoded images within a document.
   await client.send('Network.enable');
   await client.send('Network.setCacheDisabled', { cacheDisabled: true });
-  // Playwright's routing aborts every URL ending in /favicon.ico before user handlers.
-  // CDP controls bootstrap and all site images without enabling page/context routing.
+  // Bootstrap and icon responses are controlled; unexpected external requests are recorded and blocked.
   client.on('Fetch.requestPaused', async event => {
     try {
       const url = new URL(event.request.url);
@@ -65,18 +68,18 @@ async function mockCollection(page: Page, getData: () => Bootstrap, respond: (ro
           });
         },
       };
-      if (url.origin === appOrigin && url.pathname === '/api/bootstrap') {
+      if (url.origin !== appOrigin) {
+        externalRequests.push(url.href);
+        await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+      } else if (url.pathname === '/api/bootstrap') {
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify(getData()) });
       } else if (event.resourceType === 'Image' && url.href !== appIcon) {
         const headers = event.request.headers as Record<string, string>;
         const referer = Object.entries(headers).find(([name]) => name.toLowerCase() === 'referer')?.[1];
         requests.push({ url: url.href, referer });
         await respond(route);
-      } else if (url.origin === appOrigin) {
-        await client.send('Fetch.continueRequest', { requestId: event.requestId });
       } else {
-        // Unexpected external resources must not escape the controlled fixture.
-        await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+        await client.send('Fetch.continueRequest', { requestId: event.requestId });
       }
     } catch (error) {
       // Replacing an image or closing the page can cancel a deliberately held request.
@@ -84,7 +87,7 @@ async function mockCollection(page: Page, getData: () => Bootstrap, respond: (ro
     }
   });
   await client.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-  return requests;
+  return { requests, externalRequests };
 }
 function deferred() {
   let resolve!: () => void;
@@ -105,14 +108,14 @@ function heldImage(respond: (route: ImageRoute) => Promise<void> = serveImage) {
   };
 }
 
-test('loads a real icon from the HTTPS origin without exposing bookmark paths or referrers', async ({ page }) => {
-  const host = 'icons-one.example.com';
-  const data = collection([bookmark('Public icon', `http://${host}/account/private?token=secret-value#section`)]);
+test('loads the saved bookmark icon from the same origin without exposing paths, secrets or referrers', async ({ page, baseURL }) => {
+  const item = bookmark('icon/id?#&', 'http://icons-one.example.com/account/private?token=secret-value#section', 'Public icon');
+  const data = collection([item]);
   const response = heldImage();
-  const requests = await mockCollection(page, () => data, route => response.handle(route));
+  const { requests, externalRequests } = await mockCollection(page, () => data, route => response.handle(route));
   try {
     await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
-    const icon = iconFor(page, 'Public icon');
+    const icon = iconFor(page, item.title);
     await icon.scrollIntoViewIfNeeded();
     await response.started;
     await expect(icon.locator('.site-icon-fallback')).toBeVisible();
@@ -120,171 +123,210 @@ test('loads a real icon from the HTTPS origin without exposing bookmark paths or
     await expect(image).toHaveAttribute('decoding', 'async');
     await expect(image).toHaveAttribute('referrerpolicy', 'no-referrer');
     await expect(image).not.toHaveClass(/\bis-loaded\b/);
+    const requested = new URL(requests[0].url);
+    expect(requested.origin).toBe(new URL(baseURL!).origin);
+    expect(requested.pathname).toBe('/api/bookmarks/' + encodeURIComponent(item.id) + '/icon');
+    expect([...requested.searchParams.keys()]).toEqual(['v']);
+    expect(requested.searchParams.get('v')).toContain('https://icons-one.example.com');
+    expect(requested.searchParams.get('v')).toContain('public');
+    expect(requested.searchParams.get('v')).not.toMatch(/account|token|secret-value|section/);
+    expect(requests[0].referer).toBeUndefined();
     response.release();
-    await expectLoaded(icon, favicon(host));
-    expect(requests).toEqual([{ url: favicon(host), referer: undefined }]);
+    await expectLoaded(icon, requested.href);
+    expect(requests).toHaveLength(1);
+    expect(externalRequests).toEqual([]);
   } finally { response.release(); }
 });
 
-test('falls back once after an origin failure and retains the placeholder when both sources fail', async ({ page }) => {
+test('404, 429 and 503 icon responses retain text placeholders without retries or external fallbacks', async ({ page }) => {
   await page.clock.install();
-  const goodHost = 'icons-backup.example.com';
-  const badHost = 'icons-missing.example.com';
-  const data = collection([
-    bookmark('A backup icon', `https://${goodHost}/private?secret=one`),
-    bookmark('B missing icon', `https://${badHost}/private?secret=two`),
-  ]);
-  const requests = await mockCollection(page, () => data, route => route.request().url() === backup(goodHost) ? serveImage(route) : missingImage(route));
+  const statuses = new Map([['missing-icon', 404], ['limited-icon', 429], ['unavailable-icon', 503]]);
+  const data = collection([...statuses.keys()].map(id => bookmark(id, 'https://icons-errors.example.com/private?token=' + id)));
+  const { requests, externalRequests } = await mockCollection(page, () => data, route =>
+    missingImage(route, statuses.get(requestedBookmarkId(route.request().url())!) ?? 500));
   await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
-  const good = iconFor(page, 'A backup icon');
-  await good.scrollIntoViewIfNeeded();
-  await expectLoaded(good, backup(goodHost));
-  const bad = iconFor(page, 'B missing icon');
-  await bad.scrollIntoViewIfNeeded();
-  await expect.poll(() => requests.filter(request => request.url.includes(badHost)).length).toBe(2);
+  for (const item of data.bookmarks) {
+    const icon = iconFor(page, item.title);
+    await icon.scrollIntoViewIfNeeded();
+    await expect.poll(() => requests.some(request => requestedBookmarkId(request.url) === item.id)).toBe(true);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    await expect(icon.locator('img')).toHaveCount(0);
+  }
+  await page.clock.fastForward(30_000);
   await rendered(page);
-  await expect(bad.locator('.site-icon-fallback')).toBeVisible();
-  await expect(bad.locator('img.is-loaded')).toHaveCount(0);
-  await page.clock.fastForward(20_000);
-  await rendered(page);
-  expect(requests.map(request => request.url).sort()).toEqual([favicon(goodHost), backup(goodHost), favicon(badHost), backup(badHost)].sort());
-  expect(requests.every(request => request.referer === undefined)).toBe(true);
+  expect(requests.map(request => requestedBookmarkId(request.url)).sort()).toEqual([...statuses.keys()].sort());
+  expect(externalRequests).toEqual([]);
 });
 
-test('private collections avoid third-party fallbacks and local, IP, or reserved hosts never request icons', async ({ page }) => {
-  await page.clock.install();
-  const privateHost = 'icons-private.example.com';
-  let data = collection([bookmark('Private bookmark', `https://${privateHost}/confidential?token=private`)], 'private');
-  const requests = await mockCollection(page, () => data, missingImage);
+test('private collections use the same-origin endpoint while local and invalid bookmark URLs never request icons', async ({ page, baseURL }) => {
+  let data = collection([bookmark('Private bookmark', 'https://icons-private.example.com/confidential?token=private')], 'private');
+  const { requests, externalRequests } = await mockCollection(page, () => data, serveImage);
   await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
   const privateIcon = iconFor(page, 'Private bookmark');
   await privateIcon.scrollIntoViewIfNeeded();
-  await expect.poll(() => requests.length).toBe(1);
-  await page.clock.fastForward(10_000);
-  await rendered(page);
-  await expect(privateIcon.locator('.site-icon-fallback')).toBeVisible();
-  await expect(privateIcon.locator('img.is-loaded')).toHaveCount(0);
-  expect(requests).toEqual([{ url: favicon(privateHost), referer: undefined }]);
+  await expectLoaded(privateIcon);
+  expect(requests).toHaveLength(1);
+  expect(new URL(requests[0].url).origin).toBe(new URL(baseURL!).origin);
+  expect(new URL(requests[0].url).searchParams.get('v')).toContain('private');
+  expect(externalRequests).toEqual([]);
 
-  const hosts = ['localhost', '127.0.0.1', '192.168.1.10', '8.8.8.8', '[::1]', '[fd00::1]', 'printer',
+  const urls = ['localhost', '127.0.0.1', '192.168.1.10', '8.8.8.8', '[::1]', '[fd00::1]', 'printer',
     'printer.local', 'printer.lan', 'printer.internal', 'printer.home', 'printer.test', 'printer.example',
-    'printer.invalid', 'printer.onion', 'printer.home.arpa'];
-  data = collection(hosts.map((host, index) => bookmark(`Local icon ${index}`, `http://${host}/secret?key=private`)));
+    'printer.invalid', 'printer.onion', 'printer.home.arpa'].map(host => 'http://' + host + '/secret?key=private');
+  urls.push('ftp://icons-invalid.example.com/file', 'https://user:secret@icons-invalid.example.com/',
+    'https://icons-invalid.example.com:8443/', 'not-a-url');
+  data = collection(urls.map((url, index) => bookmark('Local icon ' + index, url)));
   await refresh(page);
-  await expect(page.locator('.bookmark-card')).toHaveCount(hosts.length);
+  await expect(page.locator('.bookmark-card')).toHaveCount(urls.length);
   for (const card of await page.locator('.bookmark-card').all()) {
     await card.scrollIntoViewIfNeeded();
     await expect(card.locator('.site-icon-fallback')).toBeVisible();
   }
   await rendered(page);
   await expect(page.locator('.bookmark-card .site-icon img')).toHaveCount(0);
-  expect(requests).toEqual([{ url: favicon(privateHost), referer: undefined }]);
+  expect(requests).toHaveLength(1);
+  expect(externalRequests).toEqual([]);
 });
 
-test('changing the domain or privacy mode resets the image and a late old response cannot replace the new icon', async ({ page }) => {
-  const firstHost = 'icons-old.example.com';
-  const nextHost = 'icons-new.example.com';
-  let data = collection([bookmark('Mutable icon', `https://${firstHost}/private`)]);
+test('a changed domain gets a new image version and ignores the old response and deadline', async ({ page }) => {
+  await page.clock.install();
+  let data = collection([bookmark('Mutable icon', 'https://icons-old.example.com/private?token=old')]);
   const oldResponse = heldImage();
-  const nextResponse = heldImage(missingImage);
-  const backupResponse = heldImage();
-  const requests = await mockCollection(page, () => data, route => route.request().url() === favicon(firstHost)
-    ? oldResponse.handle(route) : route.request().url() === favicon(nextHost)
-      ? nextResponse.handle(route) : backupResponse.handle(route));
+  const nextResponse = heldImage();
+  const { requests, externalRequests } = await mockCollection(page, () => data, route =>
+    new URL(route.request().url()).searchParams.get('v')?.includes('icons-old.example.com')
+      ? oldResponse.handle(route) : nextResponse.handle(route));
   try {
     await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
     const icon = iconFor(page, 'Mutable icon');
     await icon.scrollIntoViewIfNeeded();
     await oldResponse.started;
-    data = collection([{ ...data.bookmarks[0], url: `https://${nextHost}/different?token=new` }]);
+    await rendered(page);
+    await page.clock.fastForward(10_000);
+    data = collection([{ ...data.bookmarks[0], url: 'https://icons-new.example.com/different?token=new' }]);
     await refresh(page);
+    await expect.poll(() => requests.length).toBe(2);
     await nextResponse.started;
-    await expect(icon.locator('img')).toHaveAttribute('src', favicon(nextHost));
+    expect(new URL(requests[1].url).pathname).toBe(new URL(requests[0].url).pathname);
+    expect(requests[1].url).not.toBe(requests[0].url);
+    expect(new URL(requests[1].url).searchParams.get('v')).toContain('https://icons-new.example.com');
+    await expect(icon.locator('img')).toHaveJSProperty('src', requests[1].url);
     oldResponse.release();
     await oldResponse.finished;
+    await page.clock.fastForward(8_100);
     await rendered(page);
     await expect(icon.locator('img')).not.toHaveClass(/\bis-loaded\b/);
     await expect(icon.locator('.site-icon-fallback')).toBeVisible();
     nextResponse.release();
-    await backupResponse.started;
-    backupResponse.release();
-    await expectLoaded(icon, backup(nextHost));
-
-    const backupRequests = requests.filter(request => request.url === backup(nextHost)).length;
-    data = { ...data, siteMode: 'private' };
-    await refresh(page);
-    // The browser may reuse decoded images; a privacy change must still discard the backup.
-    await expect(icon.locator('img.is-loaded')).toHaveCount(0);
-    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
-    expect(requests.filter(request => request.url === backup(nextHost))).toHaveLength(backupRequests);
-    data = { ...data, siteMode: 'public' };
-    await refresh(page);
-    await expectLoaded(icon, backup(nextHost));
-    expect(requests.every(request => [favicon(firstHost), favicon(nextHost), backup(nextHost)].includes(request.url))).toBe(true);
-  } finally { oldResponse.release(); nextResponse.release(); backupResponse.release(); }
+    await expectLoaded(icon, requests[1].url);
+    expect(requests).toHaveLength(2);
+    expect(externalRequests).toEqual([]);
+  } finally { oldResponse.release(); nextResponse.release(); }
 });
 
-test('offscreen cards do not mount or request an image until scrolling brings them near the viewport', async ({ page }) => {
+test('privacy mode and bookmark identity changes replace an already decoded icon', async ({ page }) => {
+  let data = collection([bookmark('identity-one', 'https://icons-identity.example.com/private', 'Identity icon')]);
+  const firstResponse = heldImage();
+  const privateResponse = heldImage();
+  const identityResponse = heldImage();
+  let currentResponse = firstResponse;
+  const { requests, externalRequests } = await mockCollection(page, () => data, route => currentResponse.handle(route));
+  try {
+    await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+    const icon = iconFor(page, 'Identity icon');
+    await icon.scrollIntoViewIfNeeded();
+    await firstResponse.started;
+    firstResponse.release();
+    await expectLoaded(icon, requests[0].url);
+
+    currentResponse = privateResponse;
+    data = { ...data, siteMode: 'private' };
+    await refresh(page);
+    await expect.poll(() => requests.length).toBe(2);
+    await privateResponse.started;
+    expect(new URL(requests[1].url).pathname).toBe(new URL(requests[0].url).pathname);
+    expect(requests[1].url).not.toBe(requests[0].url);
+    expect(new URL(requests[1].url).searchParams.get('v')).toContain('private');
+    await expect(icon.locator('img')).not.toHaveClass(/\bis-loaded\b/);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    privateResponse.release();
+    await expectLoaded(icon, requests[1].url);
+
+    currentResponse = identityResponse;
+    data = { ...data, bookmarks: [{ ...data.bookmarks[0], id: 'identity-two' }] };
+    await refresh(page);
+    await expect.poll(() => requests.length).toBe(3);
+    await identityResponse.started;
+    expect(requestedBookmarkId(requests[2].url)).toBe('identity-two');
+    expect(new URL(requests[2].url).searchParams.get('v')).toBe(new URL(requests[1].url).searchParams.get('v'));
+    await expect(icon.locator('img')).not.toHaveClass(/\bis-loaded\b/);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    identityResponse.release();
+    await expectLoaded(icon, requests[2].url);
+    expect(requests).toHaveLength(3);
+    expect(externalRequests).toEqual([]);
+  } finally { firstResponse.release(); privateResponse.release(); identityResponse.release(); }
+});
+
+test('offscreen cards do not mount or request an icon until scrolling brings them near the viewport', async ({ page }) => {
   await page.clock.install();
   const bookmarks = Array.from({ length: 40 }, (_, index) => {
     const number = String(index + 1).padStart(2, '0');
-    return bookmark(`Lazy icon ${number}`, `https://icons-lazy-${number}.example.com/page?private=value`);
+    return bookmark('Lazy icon ' + number, 'https://icons-lazy-' + number + '.example.com/page?private=value');
   });
   const data = collection(bookmarks);
-  const requests = await mockCollection(page, () => data, serveImage);
+  const { requests, externalRequests } = await mockCollection(page, () => data, serveImage);
   await page.goto('/?folder=development&pageSize=50', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.bookmark-card')).toHaveCount(40);
   const first = iconFor(page, 'Lazy icon 01');
   await first.scrollIntoViewIfNeeded();
-  await expectLoaded(first, favicon('icons-lazy-01.example.com'));
+  await expectLoaded(first);
   const last = iconFor(page, 'Lazy icon 40');
   expect(await last.evaluate(element => element.getBoundingClientRect().top > window.innerHeight + 240)).toBe(true);
-  await page.clock.fastForward(10_000);
+  await page.clock.fastForward(20_000);
   await expect(last.locator('img')).toHaveCount(0);
-  expect(requests.some(request => request.url.includes('icons-lazy-40.example.com'))).toBe(false);
+  expect(requests.some(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toBe(false);
   await last.scrollIntoViewIfNeeded();
-  await expectLoaded(last, favicon('icons-lazy-40.example.com'));
+  await expectLoaded(last);
+  expect(requests.filter(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toHaveLength(1);
+  expect(externalRequests).toEqual([]);
 });
 
-test('a five-second timeout tries the backup and late responses cannot revive timed-out sources', async ({ page }) => {
+test('allows server discovery time but ignores an image arriving after the eighteen-second deadline', async ({ page }) => {
   await page.clock.install();
-  const slowHost = 'icons-slow.example.com';
-  const exhaustedHost = 'icons-exhausted.example.com';
-  const data = collection([bookmark('A slow icon', `https://${slowHost}/private`), bookmark('B exhausted icon', `https://${exhaustedHost}/private`)]);
-  const slowOrigin = heldImage();
-  const slowBackup = heldImage();
-  const exhaustedOrigin = heldImage();
-  const exhaustedBackup = heldImage();
-  const responses = new Map([[favicon(slowHost), slowOrigin], [backup(slowHost), slowBackup],
-    [favicon(exhaustedHost), exhaustedOrigin], [backup(exhaustedHost), exhaustedBackup]]);
-  const requests = await mockCollection(page, () => data, route => responses.get(route.request().url())?.handle(route) ?? missingImage(route));
+  const data = collection([
+    bookmark('timely-icon', 'https://icons-timely.example.com/private', 'A timely icon'),
+    bookmark('late-icon', 'https://icons-late.example.com/private', 'B late icon'),
+  ]);
+  const timelyResponse = heldImage();
+  const lateResponse = heldImage();
+  const { requests, externalRequests } = await mockCollection(page, () => data, route =>
+    requestedBookmarkId(route.request().url()) === 'timely-icon' ? timelyResponse.handle(route) : lateResponse.handle(route));
   try {
     await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
-    const slow = iconFor(page, 'A slow icon');
-    const exhausted = iconFor(page, 'B exhausted icon');
-    await slow.scrollIntoViewIfNeeded();
-    await exhausted.scrollIntoViewIfNeeded();
-    await Promise.all([slowOrigin.started, exhaustedOrigin.started]);
-    await page.clock.fastForward(5_100);
-    await Promise.all([slowBackup.started, exhaustedBackup.started]);
-    await expect(slow.locator('img')).toHaveAttribute('src', backup(slowHost));
-    slowOrigin.release();
-    await slowOrigin.finished;
+    const timely = iconFor(page, 'A timely icon');
+    const late = iconFor(page, 'B late icon');
+    await timely.scrollIntoViewIfNeeded();
+    await late.scrollIntoViewIfNeeded();
+    await Promise.all([timelyResponse.started, lateResponse.started]);
     await rendered(page);
-    await expect(slow.locator('img')).not.toHaveClass(/\bis-loaded\b/);
-    await expect(slow.locator('.site-icon-fallback')).toBeVisible();
-    slowBackup.release();
-    await expectLoaded(slow, backup(slowHost));
+    await page.clock.fastForward(13_000);
+    await expect(timely.locator('img')).toHaveCount(1);
+    await expect(late.locator('img')).toHaveCount(1);
+    await expect(late.locator('.site-icon-fallback')).toBeVisible();
+    timelyResponse.release();
+    await expectLoaded(timely);
 
     await page.clock.fastForward(5_100);
-    exhaustedOrigin.release();
-    exhaustedBackup.release();
-    await Promise.all([exhaustedOrigin.finished, exhaustedBackup.finished]);
+    await expect(late.locator('img')).toHaveCount(0);
+    lateResponse.release();
+    await lateResponse.finished;
     await rendered(page);
-    await expect(exhausted.locator('.site-icon-fallback')).toBeVisible();
-    await expect(exhausted.locator('img.is-loaded')).toHaveCount(0);
+    await expect(late.locator('.site-icon-fallback')).toBeVisible();
+    await expect(late.locator('img')).toHaveCount(0);
     await page.clock.fastForward(20_000);
-    await rendered(page);
-    expect(requests.map(request => request.url).sort()).toEqual([...responses.keys()].sort());
-  } finally { for (const response of responses.values()) response.release(); }
+    await expectLoaded(timely);
+    expect(requests).toHaveLength(2);
+    expect(externalRequests).toEqual([]);
+  } finally { timelyResponse.release(); lateResponse.release(); }
 });

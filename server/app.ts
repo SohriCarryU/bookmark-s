@@ -6,6 +6,8 @@ import { hashPassword, verifyPassword } from './password.js'
 import { ApiError } from './errors.js'
 import { auditedMutation, listOperations, operationDetail, revertOperation } from './audit.js'
 import { RateLimiter, RateLimitError } from './rate-limit.js'
+import { siteIconOrigin } from '../shared/site-icons.js'
+import type { SiteIconResolver } from './site-icons.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -15,6 +17,8 @@ export interface AppConfig {
   publicOrigin?: string
   /** Each runtime supplies a trusted client address; request headers are not trusted by default. */
   clientIp?: (context: Context) => string
+  /** Runtime-specific public-network transport and a bounded icon cache. */
+  resolveSiteIcon?: SiteIconResolver
 }
 
 interface Category {
@@ -428,6 +432,27 @@ export function createApp(db: Database, config: AppConfig) {
       canViewContent: true,
       stats: { totalBookmarks: bookmarks.length, totalClicks: bookmarks.reduce((sum, bookmark) => sum + bookmark.clicks, 0), totalCategories: categories.length },
     })
+  })
+
+  app.get('/api/bookmarks/:id/icon', async c => {
+    rateLimit(c, 'icons:ip', 600, 60)
+    const user = c.get('user')
+    rateLimiter.reserve([{ key: user ? `icons:user:${user.id}` : `icons:visitor:${c.get('visitorId')}`, max: 180, seconds: 60 }])
+    // Accept a saved, visible bookmark ID only. A query string can version the
+    // browser image, but can never choose a fetch URL or override privacy mode.
+    const bookmark = await db.get<{ url: string }>(`SELECT url FROM bookmarks WHERE id = ?
+      AND NOT EXISTS (SELECT 1 FROM bookmark_tags bt JOIN user_blocked_tags ub ON ub.tag_id = bt.tag_id
+        WHERE bt.bookmark_id = bookmarks.id AND ub.user_id = ?)`, [c.req.param('id'), user?.id ?? ''])
+    if (!bookmark || !siteIconOrigin(bookmark.url) || !config.resolveSiteIcon) throw new ApiError('暂无可用的网站图标', 404)
+    const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: c.get('settings').siteMode === 'public' })
+    if (!icon) throw new ApiError('暂无可用的网站图标', 404)
+    // Keep authorization effective on every request, including after logout or
+    // a switch to private mode. Upstream bytes are cached inside the resolver.
+    c.header('Cache-Control', 'no-store')
+    c.header('Content-Type', icon.contentType)
+    c.header('Cross-Origin-Resource-Policy', 'same-origin')
+    c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox")
+    return c.body(new Uint8Array(icon.bytes))
   })
 
   app.post('/api/auth/login', async c => {
