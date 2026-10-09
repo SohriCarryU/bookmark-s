@@ -178,7 +178,7 @@ test('multi-folder migration copies legacy pins and folder memberships without c
     old.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'))
   }
   old.exec("INSERT INTO submissions (id,title,url,category_id) VALUES ('legacy','Legacy','https://legacy.example','explore')")
-  const original = old.prepare('SELECT * FROM bookmarks ORDER BY id').all()
+  const original = old.prepare('SELECT *,NULL AS icon_url FROM bookmarks ORDER BY id').all()
   old.close()
   let db = createSqliteDatabase(filename)
   try {

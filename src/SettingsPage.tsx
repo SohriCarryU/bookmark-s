@@ -189,7 +189,7 @@ export default function SettingsPage({
           </div>
         </div>
         <p className="settings-help">Cloudflare 部署时，开启后即使命中缓存，图标请求仍计入 Workers 请求次数。</p>
-        <p className="settings-help">关闭后图标来源会收到访问者 IP；公开模式可能使用 DuckDuckGo 备用图标，私人模式不启用此备用来源。</p>
+        <p className="settings-help">关闭后图标来源会收到访问者 IP；公开模式可能依次使用 Google、DuckDuckGo 备用图标，私人模式不启用这些自动备用来源。</p>
         {iconCacheError && <p className="form-error" role="alert">{iconCacheError}</p>}
       </section>
       <WebDavSettings onNotify={onNotify} />

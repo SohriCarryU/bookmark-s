@@ -603,7 +603,7 @@ test('the operations migration preserves existing content and persists history a
     old.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'))
   }
   old.exec("UPDATE bookmarks SET clicks = 7777, description = 'Preserved legacy content' WHERE id = 'github'")
-  const legacyBookmarks = old.prepare('SELECT * FROM bookmarks ORDER BY id').all()
+  const legacyBookmarks = old.prepare('SELECT *,NULL AS icon_url FROM bookmarks ORDER BY id').all()
   const legacyFolders = old.prepare('SELECT * FROM bookmark_categories ORDER BY bookmark_id,position').all()
   const legacyTags = old.prepare('SELECT * FROM bookmark_tags ORDER BY bookmark_id,tag_id').all()
   old.close()

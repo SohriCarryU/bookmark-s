@@ -1508,6 +1508,7 @@ export default function App() {
           categories={categories}
           tags={tags}
           defaultCategory={category?.id}
+          canManageIcons={isAdmin}
           onClose={() => setModal(null)}
           onSaved={(bookmark) => {
             if (bookmark) updateBookmark(bookmark);

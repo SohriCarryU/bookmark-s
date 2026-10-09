@@ -2,11 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createSiteIconResolver, type SiteIconFetcher } from './site-icons.js'
+import { customSiteIconUrl, siteIconFallbackUrls } from '../shared/site-icons.js'
 
 const PNG = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64'))
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#45643b" d="M0 0h16v16H0z"/></svg>'
 const ORIGIN = 'https://icons.example.com'
 const FALLBACK = 'https://icons.duckduckgo.com/ip3/icons.example.com.ico'
+const GOOGLE = 'https://www.google.com/s2/favicons?domain=icons.example.com&sz=64'
+const CUSTOM = 'https://cdn.example.com/bookmark-icon.png?size=64'
 const HEAD = '<!doctype html><html><head></head><body>Page</body></html>'
 // WCJ really emits these hidden inputs and its icon link before the doctype.
 // HTML parsing therefore moves the link into the body, even though it precedes <head>.
@@ -156,16 +159,174 @@ test('Aliyun: prefers the valid declared CDN ICO and rejects the corrupt UTF-8-e
 test('rejects a decodable DuckDuckGo PNG placeholder with HTTP 404 instead of caching it as an icon', async () => {
   const { calls, fetcher } = fixture({ [ORIGIN + '/']: () => html(), [FALLBACK]: () => image(PNG, 404) })
   assert.equal(await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback: true }), undefined)
-  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK])
+  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE])
 })
 
-test('private mode never invokes the fallback service or reuses the public-mode fallback cache', async () => {
-  const { calls, fetcher } = fixture({ [ORIGIN + '/']: () => html(), [FALLBACK]: () => image() })
+test('Z-Library: falls through DiamWall errors and a DuckDuckGo 404 PNG to a real Google icon', async () => {
+  const origin = 'https://z-library.sk'
+  const duckduckgo = 'https://icons.duckduckgo.com/ip3/z-library.sk.ico'
+  const google = 'https://www.google.com/s2/favicons?domain=z-library.sk&sz=64'
+  for (const rootStatus of [517, 404]) {
+    const { calls, fetcher } = fixture({
+      [origin + '/']: () => new Response('Access Denied | DiamWall', { status: 517, headers: { 'content-type': 'text/html' } }),
+      [origin + '/favicon.ico']: () => new Response('Browser verification required', { status: rootStatus, headers: { 'content-type': 'text/html' } }),
+      [duckduckgo]: () => image(PNG, 404),
+      [google]: () => image(),
+    })
+    const resolve = createSiteIconResolver(fetcher)
+    assert.equal((await resolve(origin + '/private?token=secret', { allowFallback: true }))?.source, google)
+    assert.equal((await resolve(origin + '/another', { allowFallback: true }))?.source, google)
+    assert.deepEqual(calls, [origin + '/', origin + '/favicon.ico', duckduckgo, google])
+  }
+})
+
+test('Google can redirect to its public gstatic icon while unsafe targets, loops and long chains are rejected', async () => {
+  const target = 'https://t2.gstatic.com/faviconV2?client=SOCIAL&url=https%3A%2F%2Ficons.example.com&size=64'
+  const { calls, fetcher } = fixture({ [GOOGLE]: () => redirect(target), [target]: () => image() })
+  assert.equal((await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback: true }))?.source, target)
+  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE, target])
+
+  for (const location of ['https://127.0.0.1/icon.png', 'http://localhost/icon.png', 'https://user:secret@cdn.example.com/icon.png', 'https://cdn.example.com:8443/icon.png', 'file:///etc/passwd', GOOGLE]) {
+    const unsafe = fixture({ [GOOGLE]: () => redirect(location) })
+    assert.equal(await createSiteIconResolver(unsafe.fetcher)(ORIGIN, { allowFallback: true }), undefined)
+    assert.deepEqual(unsafe.calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE], location)
+  }
+  const chained = fixture({
+    [GOOGLE]: () => redirect('https://t2.gstatic.com/one'),
+    ['https://t2.gstatic.com/one']: () => redirect('/two'),
+    ['https://t2.gstatic.com/two']: () => redirect('/three'),
+    ['https://t2.gstatic.com/three']: () => redirect('/four'),
+    ['https://t2.gstatic.com/four']: () => image(),
+  })
+  assert.equal(await createSiteIconResolver(chained.fetcher)(ORIGIN, { allowFallback: true }), undefined)
+  assert.deepEqual(chained.calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE, 'https://t2.gstatic.com/one', 'https://t2.gstatic.com/two', 'https://t2.gstatic.com/three'])
+})
+
+test('Google image-like error responses are never accepted or retained as successful icons', async () => {
+  for (const response of [() => image(PNG, 404), () => image('Access denied', 200, 'image/png'), () => image(PNG.slice(0, 20))]) {
+    const { fetcher } = fixture({ [GOOGLE]: response })
+    assert.equal(await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback: true }), undefined)
+  }
+})
+
+test('private mode never invokes either fallback service or reuses either public-mode fallback cache', async () => {
+  for (const source of [FALLBACK, GOOGLE]) {
+    const { calls, fetcher } = fixture({ [ORIGIN + '/']: () => html(), [source]: () => image() })
+    const resolve = createSiteIconResolver(fetcher)
+    assert.equal((await resolve(ORIGIN, { allowFallback: true }))?.source, source)
+    assert.equal(await resolve(ORIGIN + '/private', { allowFallback: false }), undefined)
+    assert.equal(await resolve(ORIGIN + '/another-private', { allowFallback: false }), undefined)
+    assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, ...(source === GOOGLE ? [GOOGLE] : []), ORIGIN + '/', ORIGIN + '/favicon.ico'])
+  }
+})
+
+test('custom image validation requires an explicit public HTTPS URL while preserving its path and query', () => {
+  assert.equal(customSiteIconUrl(' HTTPS://CDN.EXAMPLE.COM.:443/bookmark-icon.png?size=64#preview ')?.href, CUSTOM)
+  for (const raw of [
+    '', '/relative.png', '//cdn.example.com/icon.png', 'https:cdn.example.com/icon.png', 'http://cdn.example.com/icon.png',
+    'https://localhost/icon.png', 'https://127.0.0.1/icon.png', 'https://[::1]/icon.png', 'https://printer.local/icon.png',
+    'https://cdn.example.com:8443/icon.png', 'https://user:password@cdn.example.com/icon.png', 'data:image/png;base64,aGVsbG8=',
+    'https://cdn.example.com/icon.png\n', '\thttps://cdn.example.com/icon.png', 'https://cdn.example.com/icon.png?x=' + 'x'.repeat(4096),
+  ]) assert.equal(customSiteIconUrl(raw), undefined, raw)
+})
+
+test('custom image URL validation remains stable after encoding and also bounds the normalized length', () => {
+  const unicode = customSiteIconUrl('https://cdn.example.com/中文/icon.png?标签=收藏#preview')
+  assert.ok(unicode)
+  assert.equal(customSiteIconUrl(unicode.href)?.href, unicode.href)
+  const longUnicode = 'https://cdn.example.com/' + '中'.repeat(600) + '.png'
+  assert.ok(longUnicode.length < 4096)
+  assert.ok(new URL(longUnicode).href.length > 4096)
+  assert.equal(customSiteIconUrl(longUnicode), undefined)
+  const prefix = 'https://cdn.example.com/'
+  const limit = prefix + 'a'.repeat(4096 - prefix.length)
+  assert.equal(customSiteIconUrl(limit)?.href, limit)
+  assert.equal(customSiteIconUrl(limit + 'a'), undefined)
+})
+
+test('shared fallbacks use only a safe normalized hostname, never bookmark paths, queries or credentials', () => {
+  assert.deepEqual(siteIconFallbackUrls('http://ICONS.EXAMPLE.COM/private?token=secret#section'), [FALLBACK, GOOGLE])
+  for (const raw of ['http://localhost/private', 'https://127.0.0.1/', 'https://user:secret@icons.example.com/private', 'file:///etc/passwd']) {
+    assert.deepEqual(siteIconFallbackUrls(raw), [], raw)
+  }
+})
+
+test('a valid custom image wins before homepage discovery in both public and private modes', async () => {
+  for (const allowFallback of [true, false]) {
+    const { calls, fetcher } = fixture({ [CUSTOM]: () => image(), [ORIGIN + '/']: () => html() })
+    const icon = await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback, iconUrl: CUSTOM + '#preview' })
+    assert.equal(icon?.source, CUSTOM)
+    assert.deepEqual(calls, [CUSTOM])
+  }
+})
+
+test('a broken custom image resumes normal discovery and private mode still omits third-party fallbacks', async () => {
+  for (const allowFallback of [true, false]) {
+    const { calls, fetcher } = fixture({
+      [CUSTOM]: () => image(PNG, 404),
+      [ORIGIN + '/']: () => html('<head><link rel="icon" href="/declared.svg"></head>'),
+      [ORIGIN + '/declared.svg']: () => image(SVG),
+    })
+    assert.equal((await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback, iconUrl: CUSTOM }))?.source, ORIGIN + '/declared.svg')
+    assert.deepEqual(calls, [CUSTOM, ORIGIN + '/', ORIGIN + '/declared.svg'])
+  }
+  const privateMode = fixture({ [CUSTOM]: () => image(PNG, 404), [FALLBACK]: () => image(), [GOOGLE]: () => image() })
+  assert.equal(await createSiteIconResolver(privateMode.fetcher)(ORIGIN, { allowFallback: false, iconUrl: CUSTOM }), undefined)
+  assert.deepEqual(privateMode.calls, [CUSTOM, ORIGIN + '/', ORIGIN + '/favicon.ico'])
+})
+
+test('invalid custom addresses are not fetched and cannot silently upgrade HTTP to HTTPS', async () => {
+  for (const iconUrl of ['http://cdn.example.com/icon.png', 'https://127.0.0.1/icon.png', 'https://printer.local/icon.png', 'https://user:pass@cdn.example.com/icon.png', 'https://cdn.example.com:8443/icon.png', CUSTOM + '\n']) {
+    const { calls, fetcher } = fixture({ [ORIGIN + '/favicon.ico']: () => image() })
+    assert.equal((await createSiteIconResolver(fetcher)(ORIGIN, { allowFallback: false, iconUrl }))?.source, ORIGIN + '/favicon.ico')
+    assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico'], iconUrl)
+  }
+})
+
+test('custom image redirects retain public-target validation and image-content checks', async () => {
+  const target = 'https://static.example.com/logo.svg'
+  const safe = fixture({ [CUSTOM]: () => redirect(target), [target]: () => image(SVG) })
+  assert.equal((await createSiteIconResolver(safe.fetcher)(ORIGIN, { allowFallback: false, iconUrl: CUSTOM }))?.source, target)
+  assert.deepEqual(safe.calls, [CUSTOM, target])
+  for (const response of [() => redirect('https://127.0.0.1/private'), () => image('<html>verification required</html>'), () => image(PNG.slice(0, 20)), () => image('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')]) {
+    const unsafe = fixture({ [CUSTOM]: response, [ORIGIN + '/favicon.ico']: () => image() })
+    assert.equal((await createSiteIconResolver(unsafe.fetcher)(ORIGIN, { allowFallback: false, iconUrl: CUSTOM }))?.source, ORIGIN + '/favicon.ico')
+    assert.deepEqual(unsafe.calls, [CUSTOM, ORIGIN + '/', ORIGIN + '/favicon.ico'])
+  }
+})
+
+test('private or invalid bookmark origins may use an explicit public image without fetching the original address', async () => {
+  for (const rawUrl of ['http://router.local/private', 'https://192.168.1.1/admin', 'https://user:secret@icons.example.com/', 'not a website']) {
+    for (const allowFallback of [true, false]) {
+      const valid = fixture({ [CUSTOM]: () => image() })
+      assert.equal((await createSiteIconResolver(valid.fetcher)(rawUrl, { allowFallback, iconUrl: CUSTOM }))?.source, CUSTOM)
+      assert.deepEqual(valid.calls, [CUSTOM], rawUrl)
+      const broken = fixture({ [CUSTOM]: () => image(PNG, 404) })
+      assert.equal(await createSiteIconResolver(broken.fetcher)(rawUrl, { allowFallback, iconUrl: CUSTOM }), undefined)
+      assert.deepEqual(broken.calls, [CUSTOM], rawUrl)
+      const invalid = fixture({})
+      assert.equal(await createSiteIconResolver(invalid.fetcher)(rawUrl, { allowFallback, iconUrl: 'http://cdn.example.com/image.png' }), undefined)
+      assert.deepEqual(invalid.calls, [], rawUrl)
+    }
+  }
+})
+
+test('changing or clearing the custom image separates caches, including negative results and privacy mode', async () => {
+  const changed = 'https://cdn.example.com/changed.png'
+  const { calls, fetcher } = fixture({ [CUSTOM]: () => image(), [changed]: () => image(SVG), [ORIGIN + '/favicon.ico']: () => image() })
   const resolve = createSiteIconResolver(fetcher)
-  assert.equal((await resolve(ORIGIN, { allowFallback: true }))?.source, FALLBACK)
-  assert.equal(await resolve(ORIGIN + '/private', { allowFallback: false }), undefined)
-  assert.equal(await resolve(ORIGIN + '/another-private', { allowFallback: false }), undefined)
-  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, ORIGIN + '/', ORIGIN + '/favicon.ico'])
+  assert.equal((await resolve(ORIGIN, { allowFallback: true, iconUrl: CUSTOM }))?.source, CUSTOM)
+  assert.equal((await resolve(ORIGIN + '/another', { allowFallback: true, iconUrl: CUSTOM }))?.source, CUSTOM)
+  assert.equal((await resolve(ORIGIN, { allowFallback: true, iconUrl: changed }))?.source, changed)
+  assert.equal((await resolve(ORIGIN, { allowFallback: true, iconUrl: null }))?.source, ORIGIN + '/favicon.ico')
+  assert.equal((await resolve(ORIGIN, { allowFallback: false, iconUrl: CUSTOM }))?.source, CUSTOM)
+  assert.deepEqual(calls, [CUSTOM, changed, ORIGIN + '/', ORIGIN + '/favicon.ico', CUSTOM])
+
+  const misses = fixture({ [changed]: () => image() })
+  const withMisses = createSiteIconResolver(misses.fetcher)
+  assert.equal(await withMisses(ORIGIN, { allowFallback: false, iconUrl: CUSTOM }), undefined)
+  assert.equal((await withMisses(ORIGIN, { allowFallback: false, iconUrl: changed }))?.source, changed)
+  assert.deepEqual(misses.calls, [CUSTOM, ORIGIN + '/', ORIGIN + '/favicon.ico', changed])
 })
 
 test('parses real links in the HTML prefix, honors a CDN base, resolves entities, and ignores comments, script strings and templates', async () => {
@@ -453,6 +614,23 @@ test('coalesces same-origin concurrent work while keeping fallback modes separat
   assert.equal(calls.length, 4)
 })
 
+test('coalesces identical custom requests without mixing different overrides for the same origin', async () => {
+  const gate = deferred<void>()
+  const changed = 'https://cdn.example.com/changed.png'
+  const { calls, fetcher } = fixture({
+    [CUSTOM]: async () => { await gate.promise; return image() },
+    [changed]: async () => { await gate.promise; return image(SVG) },
+  })
+  const resolve = createSiteIconResolver(fetcher)
+  const first = resolve(ORIGIN + '/one', { allowFallback: false, iconUrl: CUSTOM })
+  const same = resolve(ORIGIN + '/two', { allowFallback: false, iconUrl: CUSTOM + '#preview' })
+  const other = resolve(ORIGIN, { allowFallback: false, iconUrl: changed })
+  assert.deepEqual(calls, [CUSTOM, changed])
+  gate.resolve()
+  const icons = await Promise.all([first, same, other])
+  assert.deepEqual(icons.map(icon => icon?.source), [CUSTOM, CUSTOM, changed])
+})
+
 test('bounds concurrent origins and queued requests without caching temporary admission failures', async () => {
   const gate = deferred<void>()
   const calls: string[] = []
@@ -559,5 +737,20 @@ test('the total deadline bounds uncooperative requests while leaving attempts fo
   const start = performance.now()
   assert.equal(await resolve(ORIGIN, { allowFallback: true }), undefined)
   assert.ok(performance.now() - start < 1000)
-  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK])
+  assert.deepEqual(calls, [ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE])
+})
+
+test('stalled custom, homepage and DuckDuckGo requests still leave time for a successful Google fallback', async () => {
+  const calls: string[] = []
+  const signals: AbortSignal[] = []
+  const resolve = createSiteIconResolver(async (url, options) => {
+    calls.push(url.href)
+    signals.push(options.signal)
+    return url.href === GOOGLE ? image() : new Promise(() => {})
+  }, { requestTimeoutMs: 60, totalTimeoutMs: 180 })
+  const start = performance.now()
+  assert.equal((await resolve(ORIGIN, { allowFallback: true, iconUrl: CUSTOM }))?.source, GOOGLE)
+  assert.ok(performance.now() - start < 1000)
+  assert.deepEqual(calls, [CUSTOM, ORIGIN + '/', ORIGIN + '/favicon.ico', FALLBACK, GOOGLE])
+  assert.ok(signals.every(signal => signal.aborted))
 })

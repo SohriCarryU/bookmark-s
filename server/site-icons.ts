@@ -1,9 +1,9 @@
 import { parse, parseFragment, type DefaultTreeAdapterTypes } from 'parse5'
-import { publicIconUrl, siteIconOrigin } from '../shared/site-icons.js'
+import { customSiteIconUrl, publicIconUrl, siteIconFallbackUrls, siteIconOrigin } from '../shared/site-icons.js'
 
 export type SiteIconFetcher = (url: URL, options: { signal: AbortSignal; accept: string }) => Promise<Response>
 export interface SiteIcon { bytes: Uint8Array; contentType: string; source: string }
-export type SiteIconResolver = (rawUrl: string, options: { allowFallback: boolean }) => Promise<SiteIcon | undefined>
+export type SiteIconResolver = (rawUrl: string, options: { allowFallback: boolean; iconUrl?: string | null }) => Promise<SiteIcon | undefined>
 
 export interface SiteIconResolverOptions {
   totalTimeoutMs?: number
@@ -271,7 +271,7 @@ function imageType(bytes: Uint8Array): string | undefined {
   return undefined
 }
 
-/** Resolves only icons for an origin; callers must authorize the saved bookmark first. */
+/** Resolves a saved override or discovers an origin's icon; callers must authorize the bookmark first. */
 export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIconResolverOptions = {}): SiteIconResolver {
   const totalTimeout = bounded(options.totalTimeoutMs, 12_000)
   const requestTimeout = bounded(options.requestTimeoutMs, 3_500)
@@ -325,14 +325,28 @@ export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIc
     finally { clearTimeout(timer!); controller.abort() }
   }
 
-  async function discover(origin: string, allowFallback: boolean, deadline: number): Promise<SiteIcon | undefined> {
+  async function discover(origin: string | undefined, custom: URL | undefined, allowFallback: boolean, deadline: number): Promise<SiteIcon | undefined> {
     const remaining = () => Math.max(0, deadline - performance.now())
+    const attempted = new Map<string, Resource | undefined>()
+    function asIcon(result: Resource | undefined): SiteIcon | undefined {
+      if (!result) return undefined
+      const contentType = imageType(result.bytes)
+      if (contentType) return { bytes: result.bytes, contentType, source: result.url.href }
+    }
+    if (custom) {
+      const result = await resource(custom, 'icon', Math.min(requestTimeout, origin ? remaining() / 2 : remaining()))
+      attempted.set(custom.href, result)
+      const icon = asIcon(result)
+      if (icon) return icon
+    }
+    // A public override may represent a private/internal bookmark. Do not discover its origin.
+    if (!origin) return undefined
     const homepage = safeUrl(origin)!
-    const page = await resource(homepage, 'html', Math.min(homepageTimeout, remaining()))
+    // Even a stalled custom image and homepage must leave time for all fallback sources.
+    const page = await resource(homepage, 'html', Math.min(homepageTimeout, remaining() / 2))
     const candidates = page ? declaredIcons(page.bytes, page.url) : []
     const rootIcon = safeUrl('/favicon.ico', origin)!
-    const fallback = allowFallback ? safeUrl(`https://icons.duckduckgo.com/ip3/${encodeURIComponent(homepage.hostname)}.ico`) : undefined
-    const attempted = new Map<string, Resource | undefined>()
+    const fallbacks = allowFallback ? siteIconFallbackUrls(origin).map(url => safeUrl(url)!) : []
     async function retrieve(url: URL, remainingRequests: number): Promise<Resource | undefined> {
       if (attempted.has(url.href)) return attempted.get(url.href)
       // Reserve a share of the remaining budget for every subsequent fallback.
@@ -341,16 +355,11 @@ export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIc
       attempted.set(url.href, result)
       return result
     }
-    function asIcon(result: Resource | undefined): SiteIcon | undefined {
-      if (!result) return undefined
-      const contentType = imageType(result.bytes)
-      if (contentType) return { bytes: result.bytes, contentType, source: result.url.href }
-    }
     for (let index = 0; index < candidates.length; index++) {
-      const icon = asIcon(await retrieve(candidates[index], candidates.length - index + 1 + (fallback ? 1 : 0)))
+      const icon = asIcon(await retrieve(candidates[index], candidates.length - index + 1 + fallbacks.length))
       if (icon) return icon
     }
-    const root = await retrieve(rootIcon, 1 + (fallback ? 1 : 0))
+    const root = await retrieve(rootIcon, 1 + fallbacks.length)
     const rootImage = asIcon(root)
     if (rootImage) return rootImage
     // Some SPAs serve their app HTML at /favicon.ico. Inspect this one document,
@@ -358,11 +367,15 @@ export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIc
     if (root?.isHtml && candidates.length < MAX_CANDIDATES) {
       const extra = declaredIcons(root.bytes, root.url).filter(url => !attempted.has(url.href)).slice(0, MAX_CANDIDATES - candidates.length)
       for (let index = 0; index < extra.length; index++) {
-        const icon = asIcon(await retrieve(extra[index], extra.length - index + (fallback ? 1 : 0)))
+        const icon = asIcon(await retrieve(extra[index], extra.length - index + fallbacks.length))
         if (icon) return icon
       }
     }
-    return fallback ? asIcon(await retrieve(fallback, 1)) : undefined
+    for (let index = 0; index < fallbacks.length; index++) {
+      const icon = asIcon(await retrieve(fallbacks[index], fallbacks.length - index))
+      if (icon) return icon
+    }
+    return undefined
   }
 
   function remove(key: string): void {
@@ -391,10 +404,11 @@ export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIc
     }
   }
 
-  return (rawUrl, { allowFallback }) => {
+  return (rawUrl, { allowFallback, iconUrl }) => {
     const origin = siteIconOrigin(rawUrl)
-    if (!origin || !safeUrl(origin)) return Promise.resolve(undefined)
-    const key = `${origin}|${allowFallback === true ? 1 : 0}`
+    const custom = iconUrl ? customSiteIconUrl(iconUrl) : undefined
+    if (!origin && !custom) return Promise.resolve(undefined)
+    const key = JSON.stringify([origin ?? null, custom?.href ?? null, allowFallback === true])
     const cached = cache.get(key)
     if (cached && cached.expiresAt > Date.now()) {
       cache.delete(key)
@@ -410,7 +424,7 @@ export function createSiteIconResolver(fetcher: SiteIconFetcher, options: SiteIc
       const start = () => {
         if (deadline - performance.now() < 1) { resolve(undefined); return }
         active++
-        void discover(origin, allowFallback === true, deadline).catch(() => undefined)
+        void discover(origin, custom, allowFallback === true, deadline).catch(() => undefined)
           .then(icon => { remember(key, icon); return icon })
           .finally(() => { active--; drain() }).then(resolve)
       }

@@ -6,9 +6,11 @@ import {
   LoaderCircle,
   LockKeyhole,
   Plus,
+  RotateCcw,
   Save,
   Send,
 } from "lucide-react";
+import { customSiteIconUrl } from "../shared/site-icons";
 import { api, messageOf } from "./api";
 import Modal from "./Modal";
 import FolderIconPicker from "./FolderIconPicker";
@@ -114,6 +116,7 @@ export function BookmarkModal({
   categories,
   tags,
   defaultCategory,
+  canManageIcons = false,
   onClose,
   onSaved,
 }: {
@@ -122,12 +125,17 @@ export function BookmarkModal({
   categories: Category[];
   tags: Tag[];
   defaultCategory?: string;
+  canManageIcons?: boolean;
   onClose: () => void;
   onSaved: (bookmark?: Bookmark) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const isShare = kind === "share";
+  const canEditIcon = canManageIcons && !isShare;
+  const iconInputId = useId();
+  const [iconUrlDraft, setIconUrlDraft] = useState(bookmark?.iconUrl ?? "");
+  const [iconError, setIconError] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>(
     bookmark?.tags?.map((tag) => tag.name) ?? [],
   );
@@ -164,6 +172,16 @@ export function BookmarkModal({
       categoryIds: selectedCategoryIds,
       tags: tagNames,
     };
+    if (canEditIcon) {
+      const hasIconUrl = !!iconUrlDraft.trim();
+      const iconUrl = hasIconUrl ? customSiteIconUrl(iconUrlDraft) : undefined;
+      if (hasIconUrl && !iconUrl) {
+        setIconError("请填写 HTTPS 公网图片链接，使用默认端口且不要包含用户名或密码。");
+        return;
+      }
+      payload.iconUrl = iconUrl?.href ?? null;
+      setIconError("");
+    }
     setBusy(true);
     setError("");
     try {
@@ -219,6 +237,56 @@ export function BookmarkModal({
               placeholder="https://example.com"
             />
           </label>
+          {canEditIcon && (
+            <div className="form-field bookmark-icon-field">
+              <div className="bookmark-icon-label">
+                <label htmlFor={iconInputId}>
+                  自定义图标地址 <span className="field-hint">选填</span>
+                </label>
+                {iconUrlDraft && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setIconUrlDraft("");
+                      setIconError("");
+                    }}
+                  >
+                    <RotateCcw size={13} aria-hidden="true" />
+                    恢复自动
+                  </button>
+                )}
+              </div>
+              <input
+                id={iconInputId}
+                name="iconUrl"
+                type="url"
+                inputMode="url"
+                maxLength={4096}
+                value={iconUrlDraft}
+                disabled={busy}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                aria-describedby={`${iconInputId}-hint${iconError ? ` ${iconInputId}-error` : ""}`}
+                aria-invalid={!!iconError}
+                onChange={(event) => {
+                  setIconUrlDraft(event.target.value);
+                  setIconError("");
+                }}
+                placeholder="https://example.com/icon.png"
+              />
+              <small id={`${iconInputId}-hint`}>
+                填写无需登录的 HTTPS 公网图片链接。优先使用此图片，失败时自动尝试网站图标；留空恢复自动获取。
+              </small>
+              {iconError && (
+                <p className="form-error" role="alert" id={`${iconInputId}-error`}>
+                  {iconError}
+                </p>
+              )}
+            </div>
+          )}
           <fieldset className="bookmark-folder-field" disabled={busy} aria-describedby={`${folderId}-hint`}>
             <legend>所属文件夹</legend>
             <p id={`${folderId}-hint`} className="bookmark-folder-hint">

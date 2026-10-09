@@ -11,7 +11,7 @@ function privateBootstrap(user: User | null): Bootstrap {
     categories: user ? [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#6f77eb', sortOrder: 0 }] : [],
     tags: [],
     bookmarks: user ? [{
-      id: 'private-bookmark', title: 'Private members bookmark', url: 'https://private.example/member',
+      id: 'private-bookmark', title: 'Private members bookmark', url: 'https://private.example/member', iconUrl: null,
       description: 'Only signed-in members can read this bookmark.', categoryId: 'development', categoryIds: ['development'],
       pinnedCategoryIds: [], editedBy: [],
       tags: [], clicks: 1, pinned: false, createdAt: '2026-10-07T00:00:00Z', createdBy: user.username,

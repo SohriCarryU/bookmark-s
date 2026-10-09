@@ -306,9 +306,10 @@ test('0007 preserves old operation snapshots and restart-safe folder history wit
     const originalOperation = await service.latest(owner)
     const originalBookmarks = await service.db.all('SELECT * FROM bookmarks ORDER BY id')
     // Reproduce a pre-0007 snapshot, before mutable folder metadata was tracked.
-    await service.db.run("UPDATE operation_changes SET before_json = json_remove(before_json,'$._categoryDetails'),after_json = json_remove(after_json,'$._categoryDetails')")
+    await service.db.run("UPDATE operation_changes SET before_json = json_remove(before_json,'$._categoryDetails','$.iconUrl'),after_json = json_remove(after_json,'$._categoryDetails','$.iconUrl')")
     await service.db.run('DROP TABLE operation_category_changes')
-    await service.db.run("DELETE FROM settings WHERE key = 'migration_0007_category_operations'")
+    await service.db.run('ALTER TABLE bookmarks DROP COLUMN icon_url')
+    await service.db.run("DELETE FROM settings WHERE key IN ('migration_0007_category_operations','migration_0009_bookmark_icons')")
     service.db.close()
     service = setup(undefined, filename)
     owner = await service.login()
@@ -351,7 +352,7 @@ test('an actual 0006 database with a pre-folder-management audit snapshot upgrad
   old.prepare("INSERT INTO operation_changes (operation_id,bookmark_id,before_json,after_json,after_revision) VALUES ('legacy-operation',?,NULL,?,1)")
     .run(legacySnapshot.id, JSON.stringify(legacySnapshot))
   old.prepare('INSERT INTO bookmark_revisions (bookmark_id,revision) VALUES (?,1)').run(legacySnapshot.id)
-  const before = old.prepare('SELECT * FROM bookmarks ORDER BY id').all()
+  const before = old.prepare('SELECT *,NULL AS icon_url FROM bookmarks ORDER BY id').all()
   old.close()
   const service = setup(undefined, filename)
   try {

@@ -293,6 +293,7 @@ test('the 0008 upgrade preserves existing accounts and shared data, and favorite
     'SELECT * FROM users ORDER BY id',
   ]
   const preserved = queries.map(sql => old.prepare(sql).all())
+  for (const bookmark of preserved[0]) bookmark.icon_url = null
   old.close()
   let service = setup(undefined, filename)
   try {

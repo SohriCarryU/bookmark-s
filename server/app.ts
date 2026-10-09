@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword } from './password.js'
 import { ApiError } from './errors.js'
 import { auditedMutation, listOperations, operationDetail, revertOperation } from './audit.js'
 import { RateLimiter, RateLimitError } from './rate-limit.js'
-import { siteIconOrigin } from '../shared/site-icons.js'
+import { customSiteIconUrl, siteIconOrigin } from '../shared/site-icons.js'
 import type { SiteIconResolver } from './site-icons.js'
 import type { WebDavBackupService } from './webdav-backup.js'
 import type { S3BackupService } from './s3-backup.js'
@@ -36,6 +36,7 @@ interface Bookmark {
   id: string
   title: string
   url: string
+  iconUrl: string | null
   description: string
   categoryId: string
   categoryIds: string[]
@@ -49,7 +50,7 @@ interface Bookmark {
 }
 interface Tag { id: string; name: string }
 interface TagInput { name: string; normalizedName: string }
-interface Submission extends Omit<Bookmark, 'clicks' | 'pinned' | 'pinnedCategoryIds' | 'editedBy'> {
+interface Submission extends Omit<Bookmark, 'clicks' | 'pinned' | 'pinnedCategoryIds' | 'editedBy' | 'iconUrl'> {
   status: 'pending' | 'approved' | 'rejected'
 }
 export interface User {
@@ -79,7 +80,7 @@ const asUser = (user: Pick<User, 'id' | 'username' | 'role'>, settings: SiteSett
   canPinBookmarks: user.role === 'admin' || settings.allowUserPinBookmarks,
   isOwner: false,
 })
-const bookmarkFields = 'id, title, url, description, category_id AS categoryId, clicks, pinned, created_at AS createdAt, created_by AS createdBy'
+const bookmarkFields = 'id, title, url, description, category_id AS categoryId, clicks, pinned, created_at AS createdAt, created_by AS createdBy, icon_url AS iconUrl'
 const submissionFields = 'id, title, url, description, category_id AS categoryId, status, created_at AS createdAt, created_by AS createdBy'
 const categoryFields = 'id, name, icon, color, sort_order AS sortOrder'
 const COOKIE_NAME = 'bookmark_s_session'
@@ -156,6 +157,13 @@ function websiteUrl(value: unknown) {
     throw new ApiError('网站链接必须是有效的 HTTP 或 HTTPS 地址')
   }
   return url.pathname === '/' && !url.search && !url.hash ? url.origin : url.href
+}
+
+function bookmarkIconUrl(value: unknown): string | null {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null
+  const url = typeof value === 'string' ? customSiteIconUrl(value) : undefined
+  if (!url) throw new ApiError('自定义图标必须是有效的公网 HTTPS 图片地址，长度不能超过 4096 个字符')
+  return url.href
 }
 
 async function readBody(c: Context): Promise<Record<string, unknown>> {
@@ -446,12 +454,12 @@ export function createApp(db: Database, config: AppConfig) {
     rateLimiter.reserve([{ key: user ? `icons:user:${user.id}` : `icons:visitor:${c.get('visitorId')}`, max: 180, seconds: 60 }])
     // Accept a saved, visible bookmark ID only. A query string can version the
     // browser image, but can never choose a fetch URL or override privacy mode.
-    const bookmark = await db.get<{ url: string }>(`SELECT url FROM bookmarks WHERE id = ?
+    const bookmark = await db.get<{ url: string; iconUrl: string | null }>(`SELECT url,icon_url AS iconUrl FROM bookmarks WHERE id = ?
       AND NOT EXISTS (SELECT 1 FROM bookmark_tags bt JOIN user_blocked_tags ub ON ub.tag_id = bt.tag_id
         WHERE bt.bookmark_id = bookmarks.id AND ub.user_id = ?)`, [c.req.param('id'), user?.id ?? ''])
-    if (!bookmark || !siteIconOrigin(bookmark.url) || !config.resolveSiteIcon) throw new ApiError('暂无可用的网站图标', 404)
+    if (!bookmark || (!siteIconOrigin(bookmark.url) && !customSiteIconUrl(bookmark.iconUrl ?? '')) || !config.resolveSiteIcon) throw new ApiError('暂无可用的网站图标', 404)
     if (!c.get('settings').cacheSiteIcons) throw new ApiError('服务器图标缓存已关闭', 404)
-    const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: c.get('settings').siteMode === 'public' })
+    const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: c.get('settings').siteMode === 'public', iconUrl: bookmark.iconUrl })
     if (!icon) throw new ApiError('暂无可用的网站图标', 404)
     // Keep authorization effective on every request, including after logout or
     // a switch to private mode. Upstream bytes are cached inside the resolver.
@@ -704,12 +712,14 @@ export function createApp(db: Database, config: AppConfig) {
 
   app.post('/api/bookmarks', requireBookmarkCreator, async c => {
     const body = await readBody(c)
+    if (Object.hasOwn(body, 'iconUrl') && c.get('user')!.role !== 'admin') throw new ApiError('只有管理员可以设置自定义图标', 403)
     const { title, url, description, categoryId, categoryIds } = await validateBookmark(body)
+    const iconUrl = bookmarkIconUrl(body.iconUrl)
     const tags = tagInputs(body.tags)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [url])) throw new ApiError('这个网站已经在书签里了', 409)
     const id = crypto.randomUUID()
     await auditedMutation(db, 'create', c.get('user')!, { bookmarkIds: [id] }, [
-      { sql: 'INSERT INTO bookmarks (id,title,url,description,category_id,created_by) VALUES (?,?,?,?,?,?)', params: [id, title, url, description, categoryId, c.get('user')!.username] },
+      { sql: 'INSERT INTO bookmarks (id,title,url,description,category_id,created_by,icon_url) VALUES (?,?,?,?,?,?,?)', params: [id, title, url, description, categoryId, c.get('user')!.username, iconUrl] },
       ...categoryStatements('bookmark', id, categoryIds),
       ...createTagStatements(tags), assignTagStatement('bookmark', [id], tags),
     ])
@@ -761,7 +771,7 @@ export function createApp(db: Database, config: AppConfig) {
       } else await auditedMutation(db, 'pin', c.get('user')!, { bookmarkIds: [id] }, [{ sql: 'UPDATE bookmarks SET pinned = ? WHERE id = ?', params: [body.pinned ? 1 : 0, id] }])
       return c.json({ bookmark: await findBookmark(id) })
     }
-    const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags']
+    const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags', 'iconUrl']
     if (!keys.length || keys.some(key => !accepted.includes(key))) throw new ApiError('没有可更新的书签字段')
     if ('pinned' in body && typeof body.pinned !== 'boolean') throw new ApiError('置顶状态格式不正确')
     const value = await validateBookmark({ ...existing, ...body, ...('categoryId' in body && !('categoryIds' in body) ? { categoryIds: [body.categoryId] } : {}) })
@@ -774,6 +784,7 @@ export function createApp(db: Database, config: AppConfig) {
     }
     if ('categoryIds' in body || 'categoryId' in body) { fields.push('category_id = ?'); values.push(value.categoryId) }
     if ('pinned' in body) { fields.push('pinned = ?'); values.push(body.pinned ? 1 : 0) }
+    if (body.iconUrl !== undefined) { fields.push('icon_url = ?'); values.push(bookmarkIconUrl(body.iconUrl)) }
     await auditedMutation(db, 'edit', c.get('user')!, { bookmarkIds: [id] }, [
       ...(fields.length ? [{ sql: `UPDATE bookmarks SET ${fields.join(', ')} WHERE id = ?`, params: [...values, id] }] : []),
       ...('categoryIds' in body || 'categoryId' in body ? categoryStatements('bookmark', id, value.categoryIds) : []),
@@ -914,6 +925,7 @@ export function createApp(db: Database, config: AppConfig) {
       { key: user ? `submission:user:${user.id}` : `submission:visitor:${c.get('visitorId')}`, max: 5, seconds: 60 * 60 },
     ])
     const body = await readBody(c)
+    if (Object.hasOwn(body, 'iconUrl')) throw new ApiError('推荐书签不支持自定义图标，请由管理员收录后设置')
     const { title, url, description, categoryId, categoryIds } = await validateBookmark(body)
     const tags = tagInputs(body.tags)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [url])) throw new ApiError('这个网站已经被收录啦，试试分享其他网站', 409)

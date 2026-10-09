@@ -19,6 +19,7 @@ export type Bookmark = {
   id: string;
   title: string;
   url: string;
+  iconUrl: string | null;
   description: string;
   categoryId: string;
   categoryIds: string[];
@@ -76,7 +77,7 @@ export type Bootstrap = {
 export type BookmarkInput = Pick<
   Bookmark,
   "title" | "url" | "description" | "categoryIds"
-> & { tags: string[] };
+> & { tags: string[]; iconUrl?: string | null };
 export type PersonalPreferences = {
   blockedTagIds: string[];
   tags: TagCount[];

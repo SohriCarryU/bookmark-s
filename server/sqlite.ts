@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { Database, Statement } from './db.js'
-import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql, sitePermissionsMigrationSql, collectionsMigrationSql, operationsMigrationSql, categoryOperationsMigrationSql, personalFavoritesMigrationSql } from './schema.js'
+import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql, sitePermissionsMigrationSql, collectionsMigrationSql, operationsMigrationSql, categoryOperationsMigrationSql, personalFavoritesMigrationSql, bookmarkIconsMigrationSql } from './schema.js'
 
 export function createSqliteDatabase(filename: string): Database & { close(): void } {
   const sqlite = new DatabaseSync(filename)
@@ -75,6 +75,16 @@ export function createSqliteDatabase(filename: string): Database & { close(): vo
   if (!personalFavoritesMigrated) {
     try {
       sqlite.exec(`BEGIN IMMEDIATE; ${personalFavoritesMigrationSql} COMMIT;`)
+    } catch (error) {
+      sqlite.exec('ROLLBACK')
+      sqlite.close()
+      throw error
+    }
+  }
+  const bookmarkIconsMigrated = sqlite.prepare("SELECT value FROM settings WHERE key = 'migration_0009_bookmark_icons'").get()
+  if (!bookmarkIconsMigrated) {
+    try {
+      sqlite.exec(`BEGIN IMMEDIATE; ${bookmarkIconsMigrationSql} COMMIT;`)
     } catch (error) {
       sqlite.exec('ROLLBACK')
       sqlite.close()

@@ -12,7 +12,7 @@ function collection(user: User | null = null): Bootstrap {
     const categoryId = index < 100 ? 'development' : 'design';
     return {
       id: `navigation-${index}`, title: `Navigation ${String(index + 1).padStart(3, '0')}`,
-      url: `https://navigation.example/${index}`, description: 'Navigation fixture',
+      url: `https://navigation.example/${index}`, iconUrl: null, description: 'Navigation fixture',
       categoryId, categoryIds: [categoryId], pinnedCategoryIds: [], pinned: false,
       tags: index < 80 ? index % 2 ? [alpha, beta] : [alpha] : index < 100 ? [] : [beta],
       clicks: 110 - index, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(), createdBy: null, editedBy: [],

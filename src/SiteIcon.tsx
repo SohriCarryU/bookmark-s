@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { siteIconOrigin } from "../shared/site-icons";
+import { customSiteIconUrl, siteIconFallbackUrls, siteIconOrigin } from "../shared/site-icons";
 import type { Bookmark } from "./types";
 import "./site-icons.css";
 
-type IconBookmark = Pick<Bookmark, "id" | "title" | "url">;
+type IconBookmark = Pick<Bookmark, "id" | "title" | "url"> & { iconUrl?: string | null };
 type ImageAttempt = { index: number; status: "pending" | "loaded" | "failed" };
+
+// A cache revision only, never an authorization token. Keep the custom URL's
+// path and query out of the image API URL while changing it on every URL edit.
+function iconRevision(url: string) {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < url.length; index++) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(url.charCodeAt(index))) * 0x100000001b3n);
+  }
+  return hash.toString(36);
+}
 
 function placeholder(title: string) {
   const name = title.toLowerCase();
@@ -86,19 +96,24 @@ export default function SiteIcon({ bookmark, large = false, allowFallback = fals
 }) {
   const sources = useMemo(() => {
     const origin = siteIconOrigin(bookmark.url);
-    if (!origin) return [];
+    const custom = bookmark.iconUrl ? customSiteIconUrl(bookmark.iconUrl) : undefined;
+    if (!origin && !custom) return [];
     if (!cacheSiteIcons) {
       // Direct mode avoids the site's API entirely. Only the public domain is
       // sent to the optional fallback; private collections never use that service.
-      const direct = [`${origin}/favicon.ico`];
-      if (allowFallback) direct.push(`https://icons.duckduckgo.com/ip3/${new URL(origin).hostname}.ico`);
-      return direct;
+      const direct = custom ? [custom.href] : [];
+      if (origin) {
+        direct.push(`${origin}/favicon.ico`);
+        // Cross-origin <img> cannot inspect HTTP status. DDG's decodable 404
+        // placeholder would stop the chain, so prefer Google in direct mode.
+        if (allowFallback) direct.push(...siteIconFallbackUrls(origin).reverse());
+      }
+      return [...new Set(direct)];
     }
-    // This is only a browser cache version. The server reads the saved bookmark URL
-    // and the actual site mode; paths, query strings and permission flags stay out.
-    const version = `${origin}|${allowFallback ? "public" : "private"}`;
+    // The server always reads the saved bookmark and its icon override itself.
+    const version = `${origin ?? "custom"}|${allowFallback ? "public" : "private"}|${custom ? iconRevision(custom.href) : "auto"}`;
     return [`/api/bookmarks/${encodeURIComponent(bookmark.id)}/icon?v=${encodeURIComponent(version)}`];
-  }, [bookmark.id, bookmark.url, allowFallback, cacheSiteIcons]);
+  }, [bookmark.id, bookmark.url, bookmark.iconUrl, allowFallback, cacheSiteIcons]);
   // Changing websites, privacy or loading mode resets requests and pending timers.
   // Server discovery can take 12 seconds; direct sources get eight seconds each.
   return <IconImage key={sources.join("\n")} bookmark={bookmark} large={large} sources={sources}

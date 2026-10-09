@@ -432,7 +432,7 @@ test('site-permission migration preserves accounts and content while defaults st
   old.exec("UPDATE settings SET value = 'private' WHERE key = 'site_mode'")
   old.exec("UPDATE bookmarks SET created_by = 'Legacy', clicks = 8899 WHERE id = 'github'")
   const originalUsers = old.prepare('SELECT * FROM users ORDER BY id').all()
-  const originalBookmarks = old.prepare('SELECT * FROM bookmarks ORDER BY id').all()
+  const originalBookmarks = old.prepare('SELECT *,NULL AS icon_url FROM bookmarks ORDER BY id').all()
   old.close()
   let db = createSqliteDatabase(filename)
   try {

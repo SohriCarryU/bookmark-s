@@ -25,3 +25,23 @@ export function publicIconUrl(raw: string, base?: string): URL | undefined {
 export function siteIconOrigin(raw: string): string | undefined {
   return publicIconUrl(raw)?.origin
 }
+
+/** Explicit overrides must already use HTTPS; never silently rewrite a supplied image URL. */
+export function customSiteIconUrl(raw: string): URL | undefined {
+  if (raw.length > 4096 || /[\u0000-\u001f\u007f]/.test(raw)) return undefined
+  const value = raw.trim()
+  if (!/^https:\/\//i.test(value)) return undefined
+  const url = publicIconUrl(value)
+  return url && url.href.length <= 4096 ? url : undefined
+}
+
+/** Third-party lookups receive only the public hostname, not a bookmark's path or query. */
+export function siteIconFallbackUrls(rawOrigin: string): string[] {
+  const origin = siteIconOrigin(rawOrigin)
+  if (!origin) return []
+  const hostname = encodeURIComponent(new URL(origin).hostname)
+  return [
+    `https://icons.duckduckgo.com/ip3/${hostname}.ico`,
+    `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`,
+  ]
+}

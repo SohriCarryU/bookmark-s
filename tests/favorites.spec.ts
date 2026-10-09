@@ -214,7 +214,7 @@ function mockBootstrap(user: User | null, favoriteBookmarkIds: string[] = []): B
     categories: [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#54775E', sortOrder: 0 }],
     tags: [{ id: 'common', name: '共同标签', count: 2 }],
     bookmarks: ['One', 'Two'].map((name, index) => ({
-      id: `race-${index + 1}`, title: `Race ${name}`, url: `https://race.example/${name}`, description: '',
+      id: `race-${index + 1}`, title: `Race ${name}`, url: `https://race.example/${name}`, iconUrl: null, description: '',
       categoryId: 'development', categoryIds: ['development'], pinnedCategoryIds: [], pinned: false,
       tags: [{ id: 'common', name: '共同标签' }], clicks: 0, createdAt: '2026-10-01T00:00:00.000Z', createdBy: null, editedBy: [],
     })),

@@ -25,12 +25,13 @@ test('a SQL backup restores every business table, account, favorite, relation an
     { sql: "INSERT INTO user_favorites (user_id,bookmark_id) VALUES ('reader','github'), ('owner','figma')" },
     { sql: "INSERT INTO user_blocked_tags (user_id,tag_id) VALUES ('reader','tag-example-1')" },
     { sql: "INSERT INTO bookmark_editors (bookmark_id,username) VALUES ('github','Reader')" },
+    { sql: "UPDATE bookmarks SET icon_url = ? WHERE id = 'github'", params: ['https://icons.example.com/library.svg?variant=dark&size=64'] },
     { sql: "INSERT INTO bookmark_categories (bookmark_id,category_id,pinned,position) VALUES ('github','learning',1,2)" },
     { sql: "INSERT INTO submissions (id,title,url,category_id,created_by) VALUES ('pending-review','Review me','https://pending.example','learning','Reader')" },
     { sql: "INSERT INTO submission_tags (submission_id,tag_id) VALUES ('pending-review','tag-example-2')" },
     { sql: "INSERT INTO operations (id,action,actor_id,actor_name) VALUES ('change-1','edit','reader','Reader')" },
     { sql: "INSERT INTO operations (id,action,actor_id,actor_name,revert_of) VALUES ('change-2','revert','owner','admin','change-1')" },
-    { sql: "INSERT INTO operation_changes (operation_id,bookmark_id,before_json,after_json,before_revision,after_revision) VALUES ('change-1','github',NULL,?,0,1)", params: [JSON.stringify({ title: "O'Reilly\n中文", categoryIds: ['development', 'learning'] })] },
+    { sql: "INSERT INTO operation_changes (operation_id,bookmark_id,before_json,after_json,before_revision,after_revision) VALUES ('change-1','github',NULL,?,0,1)", params: [JSON.stringify({ title: "O'Reilly\n中文", categoryIds: ['development', 'learning'], iconUrl: 'https://icons.example.com/library.svg?variant=dark&size=64' })] },
     { sql: "INSERT INTO operation_tag_changes (operation_id,tag_id,before_json,after_json) VALUES ('change-1','tag-example-1',NULL,'{}')" },
     { sql: "INSERT INTO operation_category_changes (operation_id,category_id,before_json,after_json) VALUES ('change-1','development',NULL,'{}')" },
     { sql: "INSERT INTO operation_submission_changes (operation_id,submission_id,before_json,after_json) VALUES ('change-1','pending-review',NULL,'{}')" },
@@ -57,6 +58,9 @@ test('a SQL backup restores every business table, account, favorite, relation an
   assert.deepEqual(restored.prepare(schema).all(), await source.all(schema))
   assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'seeded'").get()!.value, '1')
   assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'migration_0008_personal_favorites'").get()!.value, '1')
+  assert.equal(restored.prepare("SELECT value FROM settings WHERE key = 'migration_0009_bookmark_icons'").get()!.value, '1')
+  assert.equal(restored.prepare("SELECT icon_url FROM bookmarks WHERE id = 'github'").get()!.icon_url, 'https://icons.example.com/library.svg?variant=dark&size=64')
+  assert.equal(restored.prepare("SELECT icon_url FROM bookmarks WHERE id = 'figma'").get()!.icon_url, null)
 
   // Both relationship triggers and validation guards must still function.
   restored.prepare("INSERT INTO bookmarks (id,title,url,category_id) VALUES ('after-restore','After restore','https://restore.example','explore')").run()
@@ -115,7 +119,7 @@ test('excludes both storage providers and platform internals while preserving Wr
     { sql: 'CREATE INDEX cf_internal_index ON _cf_METADATA(value)' },
     { sql: 'CREATE TRIGGER cf_internal_trigger AFTER INSERT ON _cf_METADATA BEGIN SELECT 1; END' },
     { sql: 'CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)' },
-    ...['0001_initial.sql', '0002_tags.sql', '0003_accounts.sql', '0004_site_permissions.sql', '0005_collections_preferences.sql', '0006_operations.sql', '0007_category_operations.sql', '0008_personal_favorites.sql']
+    ...['0001_initial.sql', '0002_tags.sql', '0003_accounts.sql', '0004_site_permissions.sql', '0005_collections_preferences.sql', '0006_operations.sql', '0007_category_operations.sql', '0008_personal_favorites.sql', '0009_bookmark_icons.sql']
       .map(name => ({ sql: 'INSERT INTO d1_migrations (name,applied_at) VALUES (?,?)', params: [name, '2026-10-09 03:04:05'] })),
   ])
   const { bytes } = await createDatabaseBackup(source, fixedDate)
@@ -128,9 +132,9 @@ test('excludes both storage providers and platform internals while preserving Wr
   assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM settings WHERE substr(lower(key),1,7) = 'webdav_'").get()!.n, 0)
   assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM settings WHERE substr(lower(key),1,3) = 's3_'").get()!.n, 0)
   assert.deepEqual(restored.prepare('SELECT * FROM d1_migrations ORDER BY id').all(), await source.all('SELECT * FROM d1_migrations ORDER BY id'))
-  assert.equal(restored.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n, 8)
-  restored.prepare("INSERT INTO d1_migrations (name) VALUES ('0009_next_feature.sql')").run()
-  assert.equal(restored.prepare("SELECT id FROM d1_migrations WHERE name = '0009_next_feature.sql'").get()!.id, 9)
+  assert.equal(restored.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n, 9)
+  restored.prepare("INSERT INTO d1_migrations (name) VALUES ('0010_next_feature.sql')").run()
+  assert.equal(restored.prepare("SELECT id FROM d1_migrations WHERE name = '0010_next_feature.sql'").get()!.id, 10)
 })
 
 test('a database exceeding the SQL size limit fails explicitly without returning a partial payload', async t => {

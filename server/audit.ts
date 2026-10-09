@@ -29,7 +29,8 @@ function bookmarkSnapshot(id: string) {
     'tags',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',t.id,'name',t.name) AS item FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE bt.bookmark_id = b.id ORDER BY t.normalized_name,t.id))),
     'editedBy',json((SELECT json_group_array(username) FROM (SELECT username FROM bookmark_editors WHERE bookmark_id = b.id ORDER BY created_at,username))),
     '_editorDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('username',username,'createdAt',created_at) AS item FROM bookmark_editors WHERE bookmark_id = b.id ORDER BY created_at,username))),
-    '_categoryDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order) AS item FROM bookmark_categories bc JOIN categories c ON c.id = bc.category_id WHERE bc.bookmark_id = b.id ORDER BY bc.position,c.id)))
+    '_categoryDetails',json((SELECT json_group_array(json(item)) FROM (SELECT json_object('id',c.id,'name',c.name,'icon',c.icon,'color',c.color,'sortOrder',c.sort_order) AS item FROM bookmark_categories bc JOIN categories c ON c.id = bc.category_id WHERE bc.bookmark_id = b.id ORDER BY bc.position,c.id))),
+    'iconUrl',b.icon_url
   ) FROM bookmarks b WHERE b.id = ${id})`
 }
 
@@ -111,6 +112,7 @@ export async function auditedMutation(db: Database, action: string, actor: Actor
         AND (current_bookmark.created_by IS NULL OR current_bookmark.created_by != ?) AND oc.before_json IS NOT NULL
         AND (json_extract(oc.before_json,'$.title') != current_bookmark.title OR json_extract(oc.before_json,'$.url') != current_bookmark.url
           OR json_extract(oc.before_json,'$.description') != current_bookmark.description
+          OR json_extract(oc.before_json,'$.iconUrl') IS NOT current_bookmark.icon_url
           OR json_extract(oc.before_json,'$.tags') IS NOT json_extract(${bookmarkSnapshot('current_bookmark.id')},'$.tags')
           OR EXISTS (SELECT 1 FROM bookmark_categories bc WHERE bc.bookmark_id = current_bookmark.id AND bc.category_id NOT IN (SELECT value FROM json_each(oc.before_json,'$.categoryIds')))
           OR EXISTS (SELECT 1 FROM json_each(oc.before_json,'$.categoryIds') old WHERE old.value NOT IN (SELECT category_id FROM bookmark_categories WHERE bookmark_id = current_bookmark.id)))`,
@@ -216,10 +218,10 @@ function restoreStatements(source: string, revertId: string): Statement[] {
     { sql: `INSERT OR IGNORE INTO user_blocked_tags (user_id,tag_id) SELECT selected.value,tc.tag_id
       FROM operation_tag_changes tc,json_each(tc.before_json,'$.blockedUserIds') selected WHERE tc.operation_id = ?
       AND (selected.value = 'owner' OR EXISTS (SELECT 1 FROM users WHERE id = selected.value))`, params: sourceParams },
-    { sql: `INSERT INTO bookmarks (id,title,url,description,category_id,clicks,pinned,created_at,created_by,source_submission_id)
+    { sql: `INSERT INTO bookmarks (id,title,url,description,category_id,clicks,pinned,created_at,created_by,source_submission_id,icon_url)
       SELECT oc.bookmark_id,json_extract(oc.before_json,'$.title'),json_extract(oc.before_json,'$.url'),json_extract(oc.before_json,'$.description'),
         json_extract(oc.before_json,'$.categoryId'),COALESCE(json_extract(current.before_json,'$.clicks'),json_extract(oc.before_json,'$.clicks')),
-        json_extract(oc.before_json,'$.pinned'),json_extract(oc.before_json,'$.createdAt'),json_extract(oc.before_json,'$.createdBy'),json_extract(oc.before_json,'$._sourceSubmissionId')
+        json_extract(oc.before_json,'$.pinned'),json_extract(oc.before_json,'$.createdAt'),json_extract(oc.before_json,'$.createdBy'),json_extract(oc.before_json,'$._sourceSubmissionId'),json_extract(oc.before_json,'$.iconUrl')
       FROM operation_changes oc LEFT JOIN operation_changes current ON current.operation_id = ? AND current.bookmark_id = oc.bookmark_id
       WHERE oc.operation_id = ? AND oc.before_json IS NOT NULL`, params: [revertId, source] },
     { sql: `INSERT INTO user_favorites (user_id,bookmark_id,created_at)

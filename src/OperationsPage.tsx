@@ -42,6 +42,7 @@ function bookmarkFields(bookmark: OperationBookmark | null): Record<string, stri
   return {
     "名称": bookmark.title,
     "网址": bookmark.url,
+    "自定义图标": bookmark.iconUrl || "自动获取",
     "介绍": bookmark.description || "未填写",
     "所属文件夹": categories.map((category) => category.name).sort().join("、") || "未归档",
     "全部书签置顶": bookmark.pinned ? "已置顶" : "未置顶",
