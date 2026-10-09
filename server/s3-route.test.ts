@@ -100,7 +100,7 @@ test('S3 configuration stays out of public bootstrap and general settings, and e
   const bootstrap = await (await request('/api/bootstrap')).text()
   for (const value of [input.secretAccessKey, input.accessKeyId, input.bucket, input.endpointUrl, 's3_config']) assert.equal(bootstrap.includes(value), false)
   const general = await (await request('/api/settings', 'GET', undefined, admin)).json()
-  assert.deepEqual(general, { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false })
+  assert.deepEqual(general, { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true })
 })
 
 test('unsaved S3 connection tests do not save; backups use only saved destinations and have an independent rate limit', async t => {

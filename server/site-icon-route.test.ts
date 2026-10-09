@@ -56,6 +56,54 @@ test('private mode authenticates icon reads and does not allow query flags to en
   assert.deepEqual(calls, [{ url: 'https://github.com', allowFallback: false }])
 })
 
+test('disabled server icon caching bypasses even a warmed resolver and cannot be enabled by query flags', async t => {
+  const { db, calls, request, login } = setup()
+  t.after(() => db.close())
+  const cookie = await login()
+  assert.equal((await request('/api/bookmarks/github/icon')).status, 200)
+  assert.equal(calls.length, 1)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: false }, cookie)).status, 200)
+  for (const auth of [undefined, cookie]) {
+    for (const query of ['', '?cacheSiteIcons=true&cache_site_icons=1&allowFallback=true&url=https://example.com&v=enabled']) {
+      const response = await request(`/api/bookmarks/github/icon${query}`, 'GET', undefined, auth)
+      assert.equal(response.status, 404)
+      assert.equal((await response.json()).error, '服务器图标缓存已关闭')
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+      assert.equal(response.headers.get('location'), null)
+    }
+  }
+  assert.equal(calls.length, 1)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: true }, cookie)).status, 200)
+  const enabled = await request('/api/bookmarks/github/icon')
+  assert.equal(enabled.status, 200)
+  assert.equal(await enabled.text(), svg)
+  assert.equal(calls.length, 2)
+})
+
+test('disabled server icon caching preserves private-site and bookmark visibility checks', async t => {
+  const { db, calls, request, login } = setup()
+  t.after(() => db.close())
+  const cookie = await login()
+  assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private', cacheSiteIcons: false }, cookie)).status, 200)
+  assert.equal((await request('/api/bookmarks/github/icon?cacheSiteIcons=true')).status, 401)
+  const disabled = await request('/api/bookmarks/github/icon', 'GET', undefined, cookie)
+  assert.equal(disabled.status, 404)
+  assert.equal((await disabled.json()).error, '服务器图标缓存已关闭')
+  const tag = await db.get<{ id: string }>('SELECT tag_id AS id FROM bookmark_tags WHERE bookmark_id = ? LIMIT 1', ['github'])
+  assert.ok(tag)
+  assert.equal((await request('/api/me/preferences', 'PATCH', { blockedTagIds: [tag.id] }, cookie)).status, 200)
+  for (const bookmarkId of ['github', 'missing']) {
+    const hidden = await request(`/api/bookmarks/${bookmarkId}/icon`, 'GET', undefined, cookie)
+    assert.equal(hidden.status, 404)
+    assert.equal((await hidden.json()).error, '暂无可用的网站图标')
+  }
+  assert.equal(calls.length, 0)
+  assert.equal((await request('/api/me/preferences', 'PATCH', { blockedTagIds: [] }, cookie)).status, 200)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: true }, cookie)).status, 200)
+  assert.equal((await request('/api/bookmarks/github/icon?allowFallback=true', 'GET', undefined, cookie)).status, 200)
+  assert.deepEqual(calls, [{ url: 'https://github.com', allowFallback: false }])
+})
+
 test('blocked tags and deleted bookmarks prevent icon reads before any cached resolver access', async t => {
   const { db, calls, request, login } = setup()
   t.after(() => db.close())

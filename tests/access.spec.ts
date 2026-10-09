@@ -6,7 +6,7 @@ const mockMember: User = { id: 'mock-member', username: 'mock-member', role: 'us
 
 function privateBootstrap(user: User | null): Bootstrap {
   return {
-    siteMode: 'private', user, canViewContent: !!user, favoriteBookmarkIds: [],
+    siteMode: 'private', user, cacheSiteIcons: true, canViewContent: !!user, favoriteBookmarkIds: [],
     allowUserAddBookmarks: user?.canAddBookmarks ?? false, allowUserPinBookmarks: user?.canPinBookmarks ?? false,
     categories: user ? [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#6f77eb', sortOrder: 0 }] : [],
     tags: [],

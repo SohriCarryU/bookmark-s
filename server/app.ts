@@ -69,6 +69,7 @@ export interface SiteSettings {
   siteMode: 'public' | 'private'
   allowUserAddBookmarks: boolean
   allowUserPinBookmarks: boolean
+  cacheSiteIcons: boolean
 }
 type AppEnv = { Variables: { user: User | null; settings: SiteSettings; visitorId: string; clientIp: string } }
 const userFields = 'id, username, role, password_hash AS passwordHash, session_version AS sessionVersion'
@@ -182,12 +183,13 @@ export function createApp(db: Database, config: AppConfig) {
   const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, canPinBookmarks: true, isOwner: true }
 
   async function getSettings(): Promise<SiteSettings> {
-    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','allow_user_add_bookmarks','allow_user_pin_bookmarks')")
+    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','allow_user_add_bookmarks','allow_user_pin_bookmarks','cache_site_icons')")
     const values = new Map(rows.map(row => [row.key, row.value]))
     return {
       siteMode: values.get('site_mode') === 'private' ? 'private' : 'public',
       allowUserAddBookmarks: values.get('allow_user_add_bookmarks') === '1',
       allowUserPinBookmarks: values.get('allow_user_pin_bookmarks') === '1',
+      cacheSiteIcons: values.get('cache_site_icons') !== '0',
     }
   }
 
@@ -448,6 +450,7 @@ export function createApp(db: Database, config: AppConfig) {
       AND NOT EXISTS (SELECT 1 FROM bookmark_tags bt JOIN user_blocked_tags ub ON ub.tag_id = bt.tag_id
         WHERE bt.bookmark_id = bookmarks.id AND ub.user_id = ?)`, [c.req.param('id'), user?.id ?? ''])
     if (!bookmark || !siteIconOrigin(bookmark.url) || !config.resolveSiteIcon) throw new ApiError('暂无可用的网站图标', 404)
+    if (!c.get('settings').cacheSiteIcons) throw new ApiError('服务器图标缓存已关闭', 404)
     const icon = await config.resolveSiteIcon(bookmark.url, { allowFallback: c.get('settings').siteMode === 'public' })
     if (!icon) throw new ApiError('暂无可用的网站图标', 404)
     // Keep authorization effective on every request, including after logout or
@@ -612,6 +615,7 @@ export function createApp(db: Database, config: AppConfig) {
     const body = await readBody(c)
     const keys: Record<keyof SiteSettings, string> = {
       siteMode: 'site_mode', allowUserAddBookmarks: 'allow_user_add_bookmarks', allowUserPinBookmarks: 'allow_user_pin_bookmarks',
+      cacheSiteIcons: 'cache_site_icons',
     }
     const provided = Object.keys(body)
     if (!provided.length || provided.some(key => !Object.hasOwn(keys, key))) throw new ApiError('没有可更新的配置字段')
@@ -619,6 +623,7 @@ export function createApp(db: Database, config: AppConfig) {
     for (const key of ['allowUserAddBookmarks', 'allowUserPinBookmarks']) {
       if (key in body && typeof body[key] !== 'boolean') throw new ApiError('用户权限开关格式不正确')
     }
+    if ('cacheSiteIcons' in body && typeof body.cacheSiteIcons !== 'boolean') throw new ApiError('图标缓存开关格式不正确')
     await db.batch(provided.map(key => ({
       sql: 'INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
       params: [keys[key as keyof SiteSettings], typeof body[key] === 'boolean' ? body[key] ? '1' : '0' : body[key]],

@@ -42,6 +42,7 @@ export type SiteSettings = {
   siteMode: "public" | "private";
   allowUserAddBookmarks: boolean;
   allowUserPinBookmarks: boolean;
+  cacheSiteIcons: boolean;
 };
 export type Submission = {
   id: string;
@@ -64,6 +65,7 @@ export type Bootstrap = {
   siteMode: "public" | "private";
   allowUserAddBookmarks: boolean;
   allowUserPinBookmarks: boolean;
+  cacheSiteIcons: boolean;
   canViewContent: boolean;
   stats: {
     totalBookmarks: number;

@@ -892,7 +892,7 @@ export default function App() {
           {isAdmin && view === "settings" ? (
             <main className="main-content">
               <SettingsPage
-                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinBookmarks: data!.allowUserPinBookmarks }}
+                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinBookmarks: data!.allowUserPinBookmarks, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
                 onChanged={refreshData}
                 onNotify={(message, error) => setToast({ message, error })}
               />
@@ -1295,7 +1295,7 @@ export default function App() {
                               />
                             </label>
                           )}
-                          <SiteIcon bookmark={bookmark} allowFallback={data?.siteMode === "public"} />
+                          <SiteIcon bookmark={bookmark} allowFallback={data?.siteMode === "public"} cacheSiteIcons={data?.cacheSiteIcons ?? true} />
                           <div className="card-top-right">
                             {pinned && (
                               <span className="pin-badge">
@@ -1598,7 +1598,7 @@ export default function App() {
         >
           <div className="modal-body">
             <div className="delete-preview">
-              <SiteIcon bookmark={modal.bookmark} allowFallback={data?.siteMode === "public"} />
+              <SiteIcon bookmark={modal.bookmark} allowFallback={data?.siteMode === "public"} cacheSiteIcons={data?.cacheSiteIcons ?? true} />
               <div>
                 <strong>{modal.bookmark.title}</strong>
                 <p>{domain(modal.bookmark.url)}</p>

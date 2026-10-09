@@ -75,7 +75,7 @@ test('public settings responses stay unchanged and WebDAV writes reject cross-si
   assert.equal((await webdav.getSettings()).configured, false)
   assert.equal((await request('/api/settings/webdav', 'PUT', input, admin)).status, 200)
   const settings = await (await request('/api/settings', 'GET', undefined, admin)).json()
-  assert.deepEqual(settings, { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false })
+  assert.deepEqual(settings, { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true })
 })
 
 test('test uses submitted input without saving, while backup uses saved settings and limits repeated uploads', async t => {

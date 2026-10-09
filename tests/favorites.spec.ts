@@ -209,7 +209,7 @@ const actorA: User = { id: 'favorite-actor-a', username: 'favorites-a', role: 'u
 const actorB: User = { ...actorA, id: 'favorite-actor-b', username: 'favorites-b' };
 function mockBootstrap(user: User | null, favoriteBookmarkIds: string[] = []): Bootstrap {
   return {
-    user, favoriteBookmarkIds: user ? favoriteBookmarkIds : [], siteMode: 'public', canViewContent: true,
+    user, favoriteBookmarkIds: user ? favoriteBookmarkIds : [], siteMode: 'public', cacheSiteIcons: true, canViewContent: true,
     allowUserAddBookmarks: false, allowUserPinBookmarks: false,
     categories: [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#54775E', sortOrder: 0 }],
     tags: [{ id: 'common', name: '共同标签', count: 2 }],

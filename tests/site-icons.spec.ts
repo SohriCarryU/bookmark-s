@@ -17,7 +17,7 @@ function bookmark(id: string, url: string, title = id): Bookmark {
     pinnedCategoryIds: [], pinned: false, tags: [], clicks: 0, createdAt: '2026-10-08T00:00:00.000Z', createdBy: null, editedBy: [] };
 }
 function collection(bookmarks: Bookmark[], siteMode: Bootstrap['siteMode'] = 'public'): Bootstrap {
-  return { user: member, siteMode, canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false,
+  return { user: member, siteMode, cacheSiteIcons: true, canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false,
     favoriteBookmarkIds: [], bookmarks, tags: [],
     categories: [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#54775E', sortOrder: 0 }],
     stats: { totalBookmarks: bookmarks.length, totalCategories: 1, totalClicks: 0 } };
@@ -46,9 +46,11 @@ async function expectLoaded(icon: Locator, source?: string) {
   expect(await image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(16);
   await expect(icon.locator('.site-icon-fallback')).toBeHidden();
 }
-async function mockCollection(page: Page, getData: () => Bootstrap, respond: (route: ImageRoute) => Promise<void>) {
+async function mockCollection(page: Page, getData: () => Bootstrap, respond: (route: ImageRoute) => Promise<void>,
+  respondExternal?: (route: ImageRoute) => Promise<void>) {
   const requests: { url: string; referer: string | undefined }[] = [];
   const externalRequests: string[] = [];
+  const externalReferrers: (string | undefined)[] = [];
   const appOrigin = new URL(test.info().project.use.baseURL!).origin;
   const appIcon = new URL('/favicon.svg', appOrigin).href;
   const client = await page.context().newCDPSession(page);
@@ -68,14 +70,16 @@ async function mockCollection(page: Page, getData: () => Bootstrap, respond: (ro
           });
         },
       };
+      const headers = event.request.headers as Record<string, string>;
+      const referer = Object.entries(headers).find(([name]) => name.toLowerCase() === 'referer')?.[1];
       if (url.origin !== appOrigin) {
         externalRequests.push(url.href);
-        await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+        externalReferrers.push(referer);
+        if (respondExternal) await respondExternal(route);
+        else await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
       } else if (url.pathname === '/api/bootstrap') {
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify(getData()) });
       } else if (event.resourceType === 'Image' && url.href !== appIcon) {
-        const headers = event.request.headers as Record<string, string>;
-        const referer = Object.entries(headers).find(([name]) => name.toLowerCase() === 'referer')?.[1];
         requests.push({ url: url.href, referer });
         await respond(route);
       } else {
@@ -87,7 +91,7 @@ async function mockCollection(page: Page, getData: () => Bootstrap, respond: (ro
     }
   });
   await client.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-  return { requests, externalRequests };
+  return { requests, externalRequests, externalReferrers };
 }
 function deferred() {
   let resolve!: () => void;
@@ -268,29 +272,37 @@ test('privacy mode and bookmark identity changes replace an already decoded icon
   } finally { firstResponse.release(); privateResponse.release(); identityResponse.release(); }
 });
 
-test('offscreen cards do not mount or request an icon until scrolling brings them near the viewport', async ({ page }) => {
-  await page.clock.install();
-  const bookmarks = Array.from({ length: 40 }, (_, index) => {
-    const number = String(index + 1).padStart(2, '0');
-    return bookmark('Lazy icon ' + number, 'https://icons-lazy-' + number + '.example.com/page?private=value');
+for (const cacheSiteIcons of [true, false]) {
+  test(`offscreen ${cacheSiteIcons ? 'server' : 'direct'} icons wait until scrolling brings them near the viewport`, async ({ page }) => {
+    await page.clock.install();
+    const bookmarks = Array.from({ length: 40 }, (_, index) => {
+      const number = String(index + 1).padStart(2, '0');
+      return bookmark('Lazy icon ' + number, 'https://icons-lazy-' + number + '.example.com/page?private=value');
+    });
+    const data = { ...collection(bookmarks), cacheSiteIcons };
+    const { requests, externalRequests } = await mockCollection(page, () => data, serveImage, serveImage);
+    await page.goto('/?folder=development&pageSize=50', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.bookmark-card')).toHaveCount(40);
+    const first = iconFor(page, 'Lazy icon 01');
+    await first.scrollIntoViewIfNeeded();
+    await expectLoaded(first);
+    const last = iconFor(page, 'Lazy icon 40');
+    expect(await last.evaluate(element => element.getBoundingClientRect().top > window.innerHeight + 240)).toBe(true);
+    await page.clock.fastForward(20_000);
+    await expect(last.locator('img')).toHaveCount(0);
+    expect(requests.some(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toBe(false);
+    expect(externalRequests).not.toContain('https://icons-lazy-40.example.com/favicon.ico');
+    await last.scrollIntoViewIfNeeded();
+    await expectLoaded(last);
+    if (cacheSiteIcons) {
+      expect(requests.filter(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toHaveLength(1);
+      expect(externalRequests).toEqual([]);
+    } else {
+      expect(requests).toEqual([]);
+      expect(externalRequests.filter(url => url === 'https://icons-lazy-40.example.com/favicon.ico')).toHaveLength(1);
+    }
   });
-  const data = collection(bookmarks);
-  const { requests, externalRequests } = await mockCollection(page, () => data, serveImage);
-  await page.goto('/?folder=development&pageSize=50', { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.bookmark-card')).toHaveCount(40);
-  const first = iconFor(page, 'Lazy icon 01');
-  await first.scrollIntoViewIfNeeded();
-  await expectLoaded(first);
-  const last = iconFor(page, 'Lazy icon 40');
-  expect(await last.evaluate(element => element.getBoundingClientRect().top > window.innerHeight + 240)).toBe(true);
-  await page.clock.fastForward(20_000);
-  await expect(last.locator('img')).toHaveCount(0);
-  expect(requests.some(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toBe(false);
-  await last.scrollIntoViewIfNeeded();
-  await expectLoaded(last);
-  expect(requests.filter(request => requestedBookmarkId(request.url) === 'Lazy icon 40')).toHaveLength(1);
-  expect(externalRequests).toEqual([]);
-});
+}
 
 test('allows server discovery time but ignores an image arriving after the eighteen-second deadline', async ({ page }) => {
   await page.clock.install();
@@ -329,4 +341,158 @@ test('allows server discovery time but ignores an image arriving after the eight
     expect(requests).toHaveLength(2);
     expect(externalRequests).toEqual([]);
   } finally { timelyResponse.release(); lateResponse.release(); }
+});
+
+test('disabled server caching loads the public favicon directly without site API requests, bookmark paths or referrers', async ({ page }) => {
+  const item = bookmark('Direct icon', 'http://icons-direct.example.com/account/private?token=secret-value#section');
+  const data = { ...collection([item]), cacheSiteIcons: false, user: null };
+  const { requests, externalRequests, externalReferrers } = await mockCollection(page, () => data, missingImage, serveImage);
+  await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+  const icon = iconFor(page, item.title);
+  await icon.scrollIntoViewIfNeeded();
+  await expectLoaded(icon, 'https://icons-direct.example.com/favicon.ico');
+  expect(requests).toEqual([]);
+  expect(externalRequests).toEqual(['https://icons-direct.example.com/favicon.ico']);
+  expect(externalReferrers).toEqual([undefined]);
+});
+
+test('direct public icons fall back to the domain service only after the website fails', async ({ page }) => {
+  const item = bookmark('Direct fallback', 'https://icons-direct-fallback.example.com/private?secret=value');
+  const data = { ...collection([item]), cacheSiteIcons: false };
+  const official = 'https://icons-direct-fallback.example.com/favicon.ico';
+  const fallback = 'https://icons.duckduckgo.com/ip3/icons-direct-fallback.example.com.ico';
+  const { requests, externalRequests, externalReferrers } = await mockCollection(page, () => data, missingImage,
+    route => route.request().url() === official ? missingImage(route) : serveImage(route));
+  await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+  const icon = iconFor(page, item.title);
+  await icon.scrollIntoViewIfNeeded();
+  await expectLoaded(icon, fallback);
+  expect(requests).toEqual([]);
+  expect(externalRequests).toEqual([official, fallback]);
+  expect(externalReferrers).toEqual([undefined, undefined]);
+});
+
+test('direct private icons never use the domain service and invalid or local URLs make no image requests', async ({ page }) => {
+  await page.clock.install();
+  const urls = ['localhost', '127.0.0.1', '8.8.8.8', '[::1]', 'printer', 'printer.local', 'printer.lan',
+    'printer.internal', 'printer.home', 'printer.home.arpa', 'printer.test', 'printer.example', 'printer.invalid',
+    'printer.onion'].map(host => 'http://' + host + '/private?token=value');
+  urls.push('ftp://icons-direct-private.example.com/file', 'https://user:secret@icons-direct-private.example.com/',
+    'https://icons-direct-private.example.com:8443/', 'not-a-url');
+  const data = { ...collection([
+    bookmark('A private icon', 'https://icons-direct-private.example.com/confidential?token=value'),
+    ...urls.map((url, index) => bookmark('Invalid direct icon ' + index, url)),
+  ], 'private'), cacheSiteIcons: false };
+  const { requests, externalRequests } = await mockCollection(page, () => data, missingImage, missingImage);
+  await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+  for (const item of data.bookmarks) {
+    const icon = iconFor(page, item.title);
+    await icon.scrollIntoViewIfNeeded();
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    await expect(icon.locator('img')).toHaveCount(0);
+  }
+  await page.clock.fastForward(30_000);
+  await rendered(page);
+  expect(requests).toEqual([]);
+  expect(externalRequests).toEqual(['https://icons-direct-private.example.com/favicon.ico']);
+});
+
+test('changing cache mode replaces pending images and re-enabling it restores the site endpoint', async ({ page }) => {
+  await page.clock.install();
+  let data = collection([bookmark('Cache mode icon', 'https://icons-mode.example.com/private?secret=value')]);
+  const oldResponse = heldImage();
+  const directResponse = heldImage();
+  let cachedResponse = (route: ImageRoute) => oldResponse.handle(route);
+  const { requests, externalRequests } = await mockCollection(page, () => data,
+    route => cachedResponse(route), route => directResponse.handle(route));
+  try {
+    await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+    const icon = iconFor(page, 'Cache mode icon');
+    await icon.scrollIntoViewIfNeeded();
+    await oldResponse.started;
+    await page.clock.fastForward(5_000);
+    data = { ...data, cacheSiteIcons: false };
+    await refresh(page);
+    await directResponse.started;
+    await expect(icon.locator('img')).toHaveJSProperty('src', 'https://icons-mode.example.com/favicon.ico');
+    oldResponse.release();
+    await oldResponse.finished;
+    await rendered(page);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    await expect(icon.locator('img')).not.toHaveClass(/\bis-loaded\b/);
+    directResponse.release();
+    await expectLoaded(icon, 'https://icons-mode.example.com/favicon.ico');
+
+    cachedResponse = serveImage;
+    data = { ...data, cacheSiteIcons: true };
+    await refresh(page);
+    // The browser may reuse the already decoded image in this document, even
+    // with HTTP caching disabled. Restoring this URL need not issue a new fetch.
+    await expectLoaded(icon, requests[0].url);
+    await page.clock.fastForward(13_100);
+    await rendered(page);
+    await expectLoaded(icon, requests[0].url);
+    expect(requests.every(request => request.url === requests[0].url)).toBe(true);
+    expect(externalRequests).toEqual(['https://icons-mode.example.com/favicon.ico']);
+  } finally { oldResponse.release(); directResponse.release(); }
+});
+
+test('direct sources time out once each and late results cannot replace the placeholder', async ({ page }) => {
+  await page.clock.install();
+  const data = { ...collection([bookmark('Direct timeout', 'https://icons-timeout.example.com')]), cacheSiteIcons: false };
+  const official = 'https://icons-timeout.example.com/favicon.ico';
+  const fallback = 'https://icons.duckduckgo.com/ip3/icons-timeout.example.com.ico';
+  const firstResponse = heldImage();
+  const secondResponse = heldImage();
+  const { requests, externalRequests } = await mockCollection(page, () => data, missingImage,
+    route => route.request().url() === official ? firstResponse.handle(route) : secondResponse.handle(route));
+  try {
+    await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+    const icon = iconFor(page, 'Direct timeout');
+    await icon.scrollIntoViewIfNeeded();
+    await firstResponse.started;
+    await rendered(page);
+    await page.clock.fastForward(8_100);
+    await secondResponse.started;
+    await expect(icon.locator('img')).toHaveJSProperty('src', fallback);
+    firstResponse.release();
+    await firstResponse.finished;
+    await rendered(page);
+    await expect(icon.locator('img')).not.toHaveClass(/\bis-loaded\b/);
+    await page.clock.fastForward(8_100);
+    await expect(icon.locator('img')).toHaveCount(0);
+    secondResponse.release();
+    await secondResponse.finished;
+    await page.clock.fastForward(30_000);
+    await rendered(page);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    await expect(icon.locator('img')).toHaveCount(0);
+    expect(requests).toEqual([]);
+    expect(externalRequests).toEqual([official, fallback]);
+  } finally { firstResponse.release(); secondResponse.release(); }
+});
+
+test('switching a direct public collection to private drops its pending third-party fallback', async ({ page }) => {
+  let data = { ...collection([bookmark('Private transition', 'https://icons-transition.example.com/private')]), cacheSiteIcons: false };
+  const official = 'https://icons-transition.example.com/favicon.ico';
+  const fallback = 'https://icons.duckduckgo.com/ip3/icons-transition.example.com.ico';
+  const publicResponse = heldImage();
+  const { requests, externalRequests } = await mockCollection(page, () => data, missingImage,
+    route => route.request().url() === fallback ? publicResponse.handle(route) : missingImage(route));
+  try {
+    await page.goto('/?folder=development', { waitUntil: 'domcontentloaded' });
+    const icon = iconFor(page, 'Private transition');
+    await icon.scrollIntoViewIfNeeded();
+    await publicResponse.started;
+    data = { ...data, siteMode: 'private' };
+    await refresh(page);
+    await expect(icon.locator('img')).toHaveCount(0);
+    publicResponse.release();
+    await publicResponse.finished;
+    await rendered(page);
+    await expect(icon.locator('.site-icon-fallback')).toBeVisible();
+    await expect(icon.locator('img')).toHaveCount(0);
+    expect(requests).toEqual([]);
+    expect(externalRequests).toEqual([official, fallback, official]);
+  } finally { publicResponse.release(); }
 });

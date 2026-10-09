@@ -19,7 +19,7 @@ function collection(user: User | null = null): Bootstrap {
     };
   });
   return {
-    user, siteMode: 'public', canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false, favoriteBookmarkIds: [],
+    user, siteMode: 'public', cacheSiteIcons: true, canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false, favoriteBookmarkIds: [],
     categories: [
       { id: 'development', name: '开发工具', icon: 'Code2', color: '#54775E', sortOrder: 0 },
       { id: 'design', name: '设计灵感', icon: 'Palette', color: '#5689BD', sortOrder: 1 },

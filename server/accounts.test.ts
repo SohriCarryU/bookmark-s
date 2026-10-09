@@ -11,8 +11,8 @@ import type { Database } from './db.js'
 const config = { adminUsername: 'admin', adminPassword: 'bookmark-s-demo', sessionSecret: 'accounts-test-secret-at-least-32-characters', secureCookies: false }
 const password = 'a-strong-user-password'
 const input = { title: 'Member resource', url: 'https://member.example', categoryId: 'explore' }
-function setup(wrapDatabase?: (db: Database) => Database) {
-  const db = createSqliteDatabase(':memory:')
+function setup(wrapDatabase?: (db: Database) => Database, filename = ':memory:') {
+  const db = createSqliteDatabase(filename)
   const app = createApp(wrapDatabase ? wrapDatabase(db) : db, config)
   const request = (path: string, method = 'GET', body?: unknown, cookie?: string) => app.request(`http://localhost${path}`, {
     method,
@@ -131,12 +131,12 @@ test('site permissions apply to all existing sessions independently and ignore o
   const cookies = [await login(first.username, password), await login(second.username, password)]
   // Old installations may still contain individual grants; these must not affect capabilities.
   await db.run('UPDATE users SET can_add_bookmarks = 1 WHERE id = ?', [first.id])
-  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false }
+  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
   for (const [allowUserAddBookmarks, allowUserPinBookmarks] of [[false, false], [true, false], [false, true], [true, true], [false, false]]) {
     const response = await request('/api/settings', 'PATCH', { allowUserAddBookmarks, allowUserPinBookmarks }, owner)
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinBookmarks })
+    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinBookmarks, cacheSiteIcons: true })
     for (const [index, cookie] of cookies.entries()) {
       const state = await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()
       assert.equal(state.user.canAddBookmarks, allowUserAddBookmarks)
@@ -167,7 +167,7 @@ test('settings partially update atomically and pin-only users cannot change any 
   assert.equal(reader.canPinBookmarks, true)
   assert.equal(reader.canAddBookmarks, false)
   const cookie = await login(reader.username, password)
-  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: true }
+  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: true, cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
   for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinBookmarks: 1 }, { siteMode: 'invalid', allowUserAddBookmarks: true }, { allowUserPinBookmarks: false, allowUserAddBookmarks: null }]) {
     assert.equal((await request('/api/settings', 'PATCH', changes, owner)).status, 400)
@@ -187,6 +187,63 @@ test('settings partially update atomically and pin-only users cannot change any 
   assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true })).status, 401)
   assert.equal((await request('/api/bookmarks/github', 'DELETE', undefined, cookie)).status, 403)
   assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, cookie)).status, 403)
+})
+
+test('server icon caching defaults on and only administrators can change it with a boolean', async t => {
+  const { db, request, login, createUser } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true }
+  assert.equal(await db.get("SELECT value FROM settings WHERE key = 'cache_site_icons'"), undefined)
+  assert.equal((await (await request('/api/bootstrap')).json()).cacheSiteIcons, true)
+  assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: false })).status, 401)
+  const reader = await createUser(owner)
+  const readerCookie = await login(reader.username, password)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: false }, readerCookie)).status, 403)
+  for (const cacheSiteIcons of [null, 0, 1, '', 'false', [], {}]) {
+    const response = await request('/api/settings', 'PATCH', { cacheSiteIcons, siteMode: 'private', allowUserAddBookmarks: true }, owner)
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, '图标缓存开关格式不正确')
+    assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
+  }
+  assert.equal(await db.get("SELECT value FROM settings WHERE key = 'cache_site_icons'"), undefined)
+  const admin = await createUser(owner, 'second-admin', { role: 'admin' })
+  const adminCookie = await login(admin.username, password)
+  const disabled = await request('/api/settings', 'PATCH', { cacheSiteIcons: false }, adminCookie)
+  assert.equal(disabled.status, 200)
+  assert.deepEqual(await disabled.json(), { ...defaults, cacheSiteIcons: false })
+  for (const cookie of [undefined, readerCookie, adminCookie]) {
+    assert.equal((await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()).cacheSiteIcons, false)
+  }
+  assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, adminCookie)).status, 200)
+  const privateState = await (await request('/api/bootstrap')).json()
+  assert.equal(privateState.canViewContent, false)
+  assert.equal(privateState.cacheSiteIcons, false)
+  assert.deepEqual(privateState.bookmarks, [])
+})
+
+test('server icon caching choices survive unrelated setting edits and database restarts', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'bookmark-s-icon-settings-'))
+  const filename = join(directory, 'data.sqlite')
+  let state = setup(undefined, filename)
+  t.after(() => {
+    state.db.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+  const owner = await state.login()
+  for (const cacheSiteIcons of [false, true]) {
+    assert.equal((await state.request('/api/settings', 'PATCH', { cacheSiteIcons }, owner)).status, 200)
+    assert.equal((await state.request('/api/settings', 'PATCH', { allowUserPinBookmarks: true }, owner)).status, 200)
+    state.db.close()
+    state = setup(undefined, filename)
+    const stored = await state.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'cache_site_icons'")
+    assert.equal(stored?.value, cacheSiteIcons ? '1' : '0')
+    const settings = await (await state.request('/api/settings', 'GET', undefined, owner)).json()
+    assert.equal(settings.cacheSiteIcons, cacheSiteIcons)
+    assert.equal(settings.allowUserPinBookmarks, true)
+    assert.equal((await (await state.request('/api/bootstrap')).json()).cacheSiteIcons, cacheSiteIcons)
+  }
 })
 
 test('user search filters names and roles while deletion preserves history and immediately revokes sessions', async t => {
@@ -240,7 +297,7 @@ test('private mode returns an empty anonymous bootstrap and blocks every content
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'secret' }, owner)).status, 400)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)).status, 200)
   assert.deepEqual(await (await request('/api/bootstrap')).json(), {
-    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
+    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   })
   for (const [path, method, body] of [

@@ -6,7 +6,7 @@ const admin: User = { id: 's3-admin', username: 'admin', role: 'admin', isOwner:
 
 function bootstrap(user: User | null = admin): Bootstrap {
   return {
-    user, siteMode: 'public', canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false,
+    user, siteMode: 'public', cacheSiteIcons: true, canViewContent: true, allowUserAddBookmarks: false, allowUserPinBookmarks: false,
     categories: [], tags: [], bookmarks: [], favoriteBookmarkIds: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   };
