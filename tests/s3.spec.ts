@@ -84,7 +84,9 @@ test('tests unsaved S3 settings, persists every option and keeps the saved secre
   try {
     await page.goto('/?view=settings', { waitUntil: 'domcontentloaded' });
     const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+    await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
     const webdav = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+    await webdav.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
     await expect(card.getByRole('status')).toHaveText('正在加载备份配置…');
     initial.resolve();
     const secret = card.getByLabel('Secret Access Key', { exact: true });
@@ -137,6 +139,7 @@ test('tests unsaved S3 settings, persists every option and keeps the saved secre
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('e2e-only-s3-secret');
 
     await page.reload();
+    await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
     await expect(secret).toHaveValue('');
     await expect(time).toHaveValue('04:15');
     await expect(style).toHaveAttribute('aria-checked', 'false');
@@ -165,6 +168,7 @@ test('requires saving changes to region, bucket, prefix, addressing and retentio
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   const backup = card.getByRole('button', { name: '立即备份', exact: true });
   const save = card.getByRole('button', { name: '保存备份配置', exact: true });
   await expect(backup).toBeEnabled();
@@ -185,6 +189,7 @@ test('requires saving changes to region, bucket, prefix, addressing and retentio
   expect(writes.every(input => !Object.hasOwn(input, 'secretAccessKey'))).toBe(true);
   expect(writes.at(-1)).toMatchObject({ region: 'auto', bucket: 'new-bucket', prefix: '', retentionCount: 1000, forcePathStyle: false });
   await page.reload();
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   await expect(card.getByLabel('备份路径前缀', { exact: true })).toHaveValue('');
   await expect(card.getByLabel('保留备份数量', { exact: true })).toHaveValue('1000');
 });
@@ -197,6 +202,7 @@ test('blocks invalid retention, service URLs and dotted virtual-host buckets bef
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   const count = card.getByRole('spinbutton', { name: '保留备份数量', exact: true });
   const endpoint = card.getByLabel('S3 Endpoint', { exact: true });
   async function invalid(field: Locator, value: string) {
@@ -231,6 +237,7 @@ test('retains the secret for an equivalent endpoint but requires re-entry after 
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   const endpoint = card.getByLabel('S3 Endpoint', { exact: true });
   const accessKey = card.getByLabel('Access Key ID', { exact: true });
   const secret = card.getByLabel('Secret Access Key', { exact: true });
@@ -278,6 +285,7 @@ test('retries loading and saving while retaining edits and reporting connection 
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   await expect(card.getByRole('alert')).toHaveText('暂时无法读取 S3 配置');
   await card.getByRole('button', { name: '重新加载', exact: true }).click();
   await expect(card.getByLabel('S3 Endpoint', { exact: true })).toHaveValue(saved.endpointUrl);
@@ -289,6 +297,13 @@ test('retries loading and saving while retaining edits and reporting connection 
   await card.getByRole('button', { name: '保存备份配置', exact: true }).click();
   await expect(card.getByRole('alert')).toHaveText('保存失败，请稍后重试');
   await expect(prefix).toHaveValue('retry-backups/');
+  const toggle = card.getByRole('button', { name: 'S3 存储备份', exact: true });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(prefix).toBeHidden();
+  await toggle.click();
+  await expect(prefix).toHaveValue('retry-backups/');
+  await expect(card.getByRole('alert')).toHaveText('保存失败，请稍后重试');
   await expect(card.getByRole('button', { name: '立即备份', exact: true })).toBeDisabled();
   await card.getByRole('button', { name: '保存备份配置', exact: true }).click();
   await expect(card.getByRole('alert')).toHaveCount(0);
@@ -319,6 +334,7 @@ test('shows upload failure separately from the previous success and retries with
   try {
     await page.goto('/?view=settings');
     const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+    await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
     const status = card.getByRole('region', { name: '备份状态', exact: true });
     await card.getByRole('button', { name: '立即备份', exact: true }).click();
     await expect(card.getByRole('button', { name: '备份中…', exact: true })).toBeDisabled();
@@ -355,6 +371,7 @@ test('preserves a successful upload when old-backup cleanup is incomplete and cl
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   const status = card.getByRole('region', { name: '备份状态', exact: true });
   await card.getByRole('button', { name: '立即备份', exact: true }).click();
   await expect(status.getByText('已上传，清理未完成', { exact: true })).toBeVisible();
@@ -364,6 +381,7 @@ test('preserves a successful upload when old-backup cleanup is incomplete and cl
   await expect(detail(status, '已清理旧备份')).toHaveText('2 个');
   await expect(page.locator('.toast.toast-error')).toHaveText('备份已上传，旧备份清理未完成');
   await page.reload();
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   await expect(status.getByRole('alert')).toContainText('备份已上传，旧备份清理未完成');
   expect(attempts).toBe(1);
   await card.getByRole('button', { name: '立即备份', exact: true }).click();
@@ -388,9 +406,11 @@ test('polls server-owned running backups after reload and recovers without trigg
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   const status = card.getByRole('region', { name: '备份状态', exact: true });
   await expect(status.getByText('正在备份', { exact: true })).toBeVisible();
   await page.reload();
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   await expect(card.getByRole('button', { name: '备份中…', exact: true })).toBeDisabled();
   await page.clock.fastForward(3_000);
   await expect(status.getByRole('alert')).toHaveText('备份状态更新失败，正在重试：暂时无法查询');
@@ -414,6 +434,7 @@ test('keeps provider help, labelled controls and backup details readable at desk
   }) }));
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'S3 存储备份', exact: true });
+  await card.getByRole('button', { name: 'S3 存储备份', exact: true }).click();
   await card.getByText('常见服务填写示例', { exact: true }).click();
   await expect(card.getByText('Cloudflare R2', { exact: true })).toBeVisible();
   await expect(detail(card, '备份文件')).toHaveText(fileName);

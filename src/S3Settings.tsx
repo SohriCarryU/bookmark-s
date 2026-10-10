@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CheckCircle2, Clock3, CloudUpload, FolderSync, LoaderCircle, Save, TriangleAlert, Unplug, XCircle } from "lucide-react";
 import type { S3Settings as Settings, S3SettingsInput } from "../shared/s3";
 import { api, messageOf } from "./api";
+import SettingsSection from "./SettingsSection";
 import "./webdav-settings.css";
 import "./s3-settings.css";
 
@@ -201,14 +202,13 @@ export default function S3Settings({ onNotify }: {
   const cleanupWarning = status === "success" ? last?.cleanupWarning : null;
 
   return (
-    <section className="settings-card webdav-settings s3-settings" aria-labelledby={`${id}-heading`}>
-      <div className="settings-card-heading">
-        <span className="settings-section-icon"><CloudUpload size={19} aria-hidden="true" /></span>
-        <div>
-          <h2 id={`${id}-heading`}>S3 存储备份</h2>
-          <p>将完整数据备份到 Amazon S3、Cloudflare R2 或其他 S3 兼容存储，可与 WebDAV 同时使用。</p>
-        </div>
-      </div>
+    <SettingsSection
+      headingId={`${id}-heading`}
+      title="S3 存储备份"
+      description="将完整数据备份到 Amazon S3、Cloudflare R2 或其他 S3 兼容存储，可与 WebDAV 同时使用。"
+      icon={<CloudUpload size={19} aria-hidden="true" />}
+      className="webdav-settings s3-settings"
+    >
       {loading ? (
         <div className="settings-list-status" role="status"><LoaderCircle size={18} className="spin" aria-hidden="true" />正在加载备份配置…</div>
       ) : loadError ? (
@@ -364,6 +364,6 @@ export default function S3Settings({ onNotify }: {
           </div>
         </>
       ) : null}
-    </section>
+    </SettingsSection>
   );
 }

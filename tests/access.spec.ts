@@ -205,6 +205,7 @@ test.describe('persisted accounts and settings', () => {
     await context.addCookies((await admin.storageState()).cookies);
     await page.goto('/');
     await page.getByRole('button', { name: '站点配置', exact: true }).click();
+    await page.getByRole('button', { name: '用户权限', exact: true }).click();
     await expect(page.getByRole('switch', { name: '允许用户添加书签', exact: true })).toHaveAttribute('aria-checked', 'false');
     await expect(page.getByRole('switch', { name: '允许用户置顶书签', exact: true })).toHaveAttribute('aria-checked', 'false');
     await expect(page.getByRole('region', { name: '创建用户', exact: true })).toHaveCount(0);
@@ -370,6 +371,7 @@ test.describe('persisted accounts and settings', () => {
     await context.addCookies((await admin.storageState()).cookies);
     await page.goto('/');
     await page.getByRole('button', { name: '站点配置', exact: true }).click();
+    await page.getByRole('button', { name: '访问模式', exact: true }).click();
     const guestContext = await browser.newContext({ baseURL });
     try {
       const guest = await guestContext.newPage();
@@ -383,6 +385,7 @@ test.describe('persisted accounts and settings', () => {
       await expect(page.getByRole('button', { name: '保存访问模式', exact: true })).toBeDisabled();
       await page.reload();
       await page.getByRole('button', { name: '站点配置', exact: true }).click();
+      await page.getByRole('button', { name: '访问模式', exact: true }).click();
       await expect(page.getByRole('radio', { name: /私人模式/ })).toBeChecked();
 
       await guest.reload();

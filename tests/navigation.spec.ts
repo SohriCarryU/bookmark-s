@@ -125,12 +125,27 @@ test('admin and personal deep links survive delayed bootstrap and refresh', asyn
     expect(new URL(page.url()).searchParams.get('page')).toBe('2');
     release();
     await expect(page.getByRole('heading', { name: '站点配置', exact: true, level: 1 })).toBeVisible();
+    for (const name of ['访问模式', '用户权限', '网站图标', 'WebDAV 备份', 'S3 存储备份']) {
+      await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('aria-expanded', 'false');
+    }
+    await page.getByRole('button', { name: '访问模式', exact: true }).press('Enter');
+    await page.getByRole('button', { name: '用户权限', exact: true }).press('Space');
+    await expect(page.getByRole('radio', { name: /公开模式/ })).toBeVisible();
+    await expect(page.getByRole('switch', { name: '允许用户添加书签', exact: true })).toBeVisible();
     expect(new URL(page.url()).searchParams.get('page')).toBe('2');
     for (const [view, heading] of [['settings', '站点配置'], ['users', '用户管理'], ['personalization', '个性化'], ['operations', '操作记录']]) {
       await page.goto(`/?view=${view}&pageSize=20`);
       await expect(page.getByRole('heading', { name: heading, exact: true, level: 1 })).toBeVisible();
+      if (view === 'settings') {
+        await page.getByRole('button', { name: '网站图标', exact: true }).click();
+        await expect(page.getByRole('switch', { name: '服务器缓存图标', exact: true })).toBeVisible();
+      }
       await page.reload();
       await expect(page.getByRole('heading', { name: heading, exact: true, level: 1 })).toBeVisible();
+      if (view === 'settings') {
+        await expect(page.getByRole('button', { name: '网站图标', exact: true })).toHaveAttribute('aria-expanded', 'false');
+        await expect(page.getByRole('switch', { name: '服务器缓存图标', exact: true })).toBeHidden();
+      }
       expect(new URL(page.url()).searchParams.get('view')).toBe(view);
     }
   } finally {
@@ -152,9 +167,12 @@ test('back and forward restore pages and filters, clear batch selections and do 
   await page.getByRole('checkbox', { name: '选择当前显示的书签', exact: true }).check();
   await expect(page.locator('.batch-selected-count')).toHaveText('已选 20/200');
   await page.getByRole('button', { name: '站点配置', exact: true }).click();
+  await page.getByRole('button', { name: '网站图标', exact: true }).click();
   await page.getByRole('button', { name: '用户管理', exact: true }).click();
   await page.goBack();
   await expect(page.getByRole('heading', { name: '站点配置', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('button', { name: '网站图标', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('switch', { name: '服务器缓存图标', exact: true })).toBeHidden();
   await page.goBack();
   await expect(currentPage(page, 2)).toHaveAttribute('aria-current', 'page');
   await expect(folder(page, '开发工具')).toHaveAttribute('aria-current', 'page');

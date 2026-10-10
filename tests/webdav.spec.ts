@@ -84,6 +84,7 @@ test('tests an unsaved connection, saves the daily schedule, and preserves the p
   try {
     await page.goto('/?view=settings', { waitUntil: 'domcontentloaded' });
     const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+    await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
     await expect(card.getByRole('status')).toHaveText('正在加载备份配置…');
     initial.resolve();
     await expect(card.getByRole('switch', { name: '每天自动备份', exact: true })).toHaveAttribute('aria-checked', 'false');
@@ -126,6 +127,7 @@ test('tests an unsaved connection, saves the daily schedule, and preserves the p
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('e2e-only-webdav-app-password');
 
     await page.reload();
+    await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
     await expect(password).toHaveValue('');
     await expect(password).toHaveAttribute('placeholder', '已保存，留空保留');
     await expect(time).toHaveValue('04:15');
@@ -160,6 +162,7 @@ test('saves retention counts for the next backup, including keeping all backups,
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   const count = card.getByRole('spinbutton', { name: '保留备份数量', exact: true });
   const save = card.getByRole('button', { name: '保存备份配置', exact: true });
   const backup = card.getByRole('button', { name: '立即备份', exact: true });
@@ -181,6 +184,7 @@ test('saves retention counts for the next backup, including keeping all backups,
   await expect(backup).toBeEnabled();
   expect(saved.retentionCount).toBe(15);
   await page.reload();
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   await expect(count).toHaveValue('15');
   for (const value of [0, 1000]) {
     await count.fill(String(value));
@@ -191,6 +195,7 @@ test('saves retention counts for the next backup, including keeping all backups,
     expect(requests.at(-1)).toMatchObject({ action: 'PUT /', input: { retentionCount: value } });
     expect(requests.at(-1)?.input).not.toHaveProperty('password');
     await page.reload();
+    await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
     await expect(count).toHaveValue(String(value));
     await expect(backup).toBeEnabled();
   }
@@ -210,6 +215,7 @@ test('rejects empty, fractional and out-of-range retention counts before testing
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   const count = card.getByRole('spinbutton', { name: '保留备份数量', exact: true });
   for (const value of ['', '-1', '1.5', '1001']) {
     await count.fill(value);
@@ -240,6 +246,7 @@ test('requires a new password when the destination or username changes and never
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   const endpoint = card.getByLabel('WebDAV 服务地址', { exact: true });
   const username = card.getByLabel('WebDAV 用户名', { exact: true });
   const password = card.getByLabel('WebDAV 密码', { exact: true });
@@ -288,6 +295,7 @@ test('retries configuration loading and saving without discarding the edited for
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   await expect(card.getByRole('alert')).toHaveText('暂时无法读取备份配置');
   await expect(card.getByLabel('WebDAV 服务地址', { exact: true })).toHaveCount(0);
   await card.getByRole('button', { name: '重新加载', exact: true }).click();
@@ -301,6 +309,13 @@ test('retries configuration loading and saving without discarding the edited for
   await card.getByRole('button', { name: '保存备份配置', exact: true }).click();
   await expect(card.getByRole('alert')).toHaveText('保存失败，请稍后重试');
   await expect(directory).toHaveValue('/retry-backups');
+  const toggle = card.getByRole('button', { name: 'WebDAV 备份', exact: true });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(directory).toBeHidden();
+  await toggle.click();
+  await expect(directory).toHaveValue('/retry-backups');
+  await expect(card.getByRole('alert')).toHaveText('保存失败，请稍后重试');
   await expect(card.getByRole('button', { name: '保存备份配置', exact: true })).toBeEnabled();
   await expect(card.getByRole('button', { name: '立即备份', exact: true })).toBeDisabled();
   await card.getByRole('button', { name: '保存备份配置', exact: true }).click();
@@ -334,6 +349,7 @@ test('shows a failed backup separately from the last success and allows a succes
   try {
     await page.goto('/?view=settings');
     const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+    await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
     const status = card.getByRole('region', { name: '备份状态', exact: true });
     await card.getByRole('button', { name: '立即备份', exact: true }).click();
     await expect(card.getByRole('button', { name: '备份中…', exact: true })).toBeDisabled();
@@ -377,6 +393,7 @@ test('reports an uploaded backup with a cleanup warning separately and preserves
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   const status = card.getByRole('region', { name: '备份状态', exact: true });
   await card.getByRole('button', { name: '立即备份', exact: true }).click();
   await expect(status.getByText('已上传，清理未完成', { exact: true })).toBeVisible();
@@ -388,6 +405,7 @@ test('reports an uploaded backup with a cleanup warning separately and preserves
   await expect(detail(status, '备份文件')).toHaveText('bookmark-s-20261009-094500.sql');
   await expect(detail(status, '已清理旧备份')).toHaveText('2 个');
   await page.reload();
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   await expect(status.getByRole('alert')).toContainText('备份已上传，旧备份清理未完成');
   await expect(detail(status, '最近成功备份')).toHaveText('2026/10/09 09:45');
   expect(attempts).toBe(1);
@@ -419,9 +437,11 @@ test('resumes status polling after page reload, recovers from a polling error, a
   });
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   const status = card.getByRole('region', { name: '备份状态', exact: true });
   await expect(status.getByText('正在备份', { exact: true })).toBeVisible();
   await page.reload();
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   await expect(status.getByText('正在备份', { exact: true })).toBeVisible();
   await expect(card.getByRole('button', { name: '备份中…', exact: true })).toBeDisabled();
   await page.clock.fastForward(3_000);
@@ -447,6 +467,7 @@ test('shows readable backup details on desktop and at 320 pixels without horizon
   }) }));
   await page.goto('/?view=settings');
   const card = page.getByRole('region', { name: 'WebDAV 备份', exact: true });
+  await card.getByRole('button', { name: 'WebDAV 备份', exact: true }).click();
   await expect(card.getByRole('alert')).toContainText('备份已上传，旧备份清理未完成');
   await expect(card.getByLabel('保留备份数量', { exact: true })).toHaveValue('15');
   await expect(detail(card, '备份文件')).toHaveText(fileName);

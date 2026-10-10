@@ -10,6 +10,19 @@
 .settings-section-icon { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px; color: #7b936b; background: #f1f5eb; }
 .settings-card-heading h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 17px; font-weight: 600; margin: 1px 0 6px; }
 .settings-card-heading p { font-size: 13px; line-height: 1.8; color: var(--muted); margin: 0; }
+.settings-card.settings-section { padding: 0; }
+.settings-section-heading { margin: 0; font-size: inherit; }
+.settings-section-toggle { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 78px; margin: 0; padding: 21px 24px; border: 0; border-radius: 12px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background-color .18s ease; }
+.settings-section-toggle:hover { background: #f5f8f0; }
+.settings-section-toggle:focus-visible { outline: 2px solid #7c9c68; outline-offset: -3px; }
+.settings-section-copy { flex: 1; min-width: 0; }
+.settings-section-title { display: block; color: #4c5e40; font-size: 17px; font-weight: 600; line-height: 1.5; }
+.settings-section-description { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; font-weight: 400; line-height: 1.8; }
+.settings-section-toggle[aria-expanded="false"] .settings-section-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.settings-section-chevron { flex: 0 0 auto; color: #8b9b7f; transition: transform .18s ease; }
+.settings-section-toggle[aria-expanded="true"] .settings-section-chevron { transform: rotate(180deg); }
+.settings-section-content { min-width: 0; padding: 0 24px 24px; }
+.settings-section-content[hidden] { display: none; }
 .settings-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .settings-mode-option { position: relative; min-width: 0; display: flex; align-items: flex-start; gap: 11px; border: 1px solid #e1e8da; border-radius: 10px; padding: 18px 34px 18px 16px; cursor: pointer; background: #fff; transition: border-color .18s, background .18s; }
 .settings-mode-option.selected { border-color: #9ab58b; background: #f1f6eb; }
@@ -86,6 +99,8 @@
 }
 @media (max-width: 820px) {
   .settings-card { padding: 20px; }
+  .settings-section-toggle { padding: 20px; }
+  .settings-section-content { padding: 0 20px 20px; }
   .users-account-main { grid-template-columns: minmax(0, 1fr); }
   .users-account-actions { grid-column: 1; justify-content: flex-start; }
   .users-role-form { max-width: 360px; }
@@ -101,6 +116,10 @@
   .settings-card-heading { gap: 9px; margin-bottom: 17px; }
   .settings-card-heading h2 { font-size: 16px; }
   .settings-card-heading p { font-size: 12px; }
+  .settings-section-toggle { gap: 9px; padding: 17px 15px; border-radius: 10px; }
+  .settings-section-title { font-size: 16px; }
+  .settings-section-description { font-size: 12px; }
+  .settings-section-content { padding: 0 15px 17px; }
   .settings-section-icon { flex-basis: 30px; width: 30px; height: 30px; }
   .settings-mode-option { padding: 15px 28px 15px 12px; gap: 9px; }
   .settings-mode-option > svg { width: 18px; }
@@ -119,5 +138,5 @@
   .settings-form-footer .primary-button { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .settings-switch, .settings-switch-thumb { transition: none; }
+  .settings-switch, .settings-switch-thumb, .settings-section-toggle, .settings-section-chevron { transition: none; }
 }

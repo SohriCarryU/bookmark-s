@@ -4,6 +4,7 @@ import { api, messageOf } from "./api";
 import type { SiteSettings } from "./types";
 import WebDavSettings from "./WebDavSettings";
 import S3Settings from "./S3Settings";
+import SettingsSection from "./SettingsSection";
 import "./settings.css";
 
 type PermissionKey = "allowUserAddBookmarks" | "allowUserPinBookmarks";
@@ -120,11 +121,12 @@ export default function SettingsPage({
         <span className="settings-heading-icon"><Settings2 size={24} /></span>
         <div><h1>站点配置</h1><p>管理收藏馆的访问方式、用户权限、网站图标和数据备份。</p></div>
       </header>
-      <section className="settings-card" aria-labelledby={`${id}-mode-heading`}>
-        <div className="settings-card-heading">
-          <span className="settings-section-icon"><Globe2 size={19} /></span>
-          <div><h2 id={`${id}-mode-heading`}>访问模式</h2><p>当前为{saved.siteMode === "public" ? "公开" : "私人"}模式，保存后立即生效。</p></div>
-        </div>
+      <SettingsSection
+        headingId={`${id}-mode-heading`}
+        title="访问模式"
+        description={<>当前为{saved.siteMode === "public" ? "公开" : "私人"}模式，保存后立即生效。</>}
+        icon={<Globe2 size={19} />}
+      >
         <form onSubmit={saveMode}>
           <fieldset className="settings-mode-options" disabled={!!busy}>
             <legend className="sr-only">站点访问模式</legend>
@@ -150,12 +152,13 @@ export default function SettingsPage({
             </button>
           </div>
         </form>
-      </section>
-      <section className="settings-card" aria-labelledby={`${id}-permissions-heading`}>
-        <div className="settings-card-heading">
-          <span className="settings-section-icon"><ShieldCheck size={19} /></span>
-          <div><h2 id={`${id}-permissions-heading`}>用户权限</h2><p>统一应用于所有普通用户，调整后立即保存。管理员始终拥有全部权限。</p></div>
-        </div>
+      </SettingsSection>
+      <SettingsSection
+        headingId={`${id}-permissions-heading`}
+        title="用户权限"
+        description="统一应用于所有普通用户，调整后立即保存。管理员始终拥有全部权限。"
+        icon={<ShieldCheck size={19} />}
+      >
         <div className="settings-permissions">
           {permissions.map(({ key, label, description }) => (
             <div className="settings-permission-row" key={key}>
@@ -171,12 +174,13 @@ export default function SettingsPage({
         </div>
         <p className="settings-help">两项权限默认关闭。未开启添加权限的用户仍可浏览收藏和提交网站推荐。</p>
         {permissionError && <p className="form-error" role="alert">{permissionError}</p>}
-      </section>
-      <section className="settings-card" aria-labelledby={`${id}-icons-heading`}>
-        <div className="settings-card-heading">
-          <span className="settings-section-icon"><ImageIcon size={19} /></span>
-          <div><h2 id={`${id}-icons-heading`}>网站图标</h2><p>根据部署平台的资源限制选择加载方式，调整后立即保存。</p></div>
-        </div>
+      </SettingsSection>
+      <SettingsSection
+        headingId={`${id}-icons-heading`}
+        title="网站图标"
+        description="根据部署平台的资源限制选择加载方式，调整后立即保存。"
+        icon={<ImageIcon size={19} />}
+      >
         <div className="settings-permissions">
           <div className="settings-permission-row">
             <div className="settings-permission-copy">
@@ -191,7 +195,7 @@ export default function SettingsPage({
         <p className="settings-help">公开模式自动在浏览器缓存本站图标 24 小时；命中时不产生本站图标请求，未命中仍计入 Cloudflare Workers 请求次数。私人模式不持久缓存本站图标。</p>
         <p className="settings-help">关闭后图标来源会收到访问者 IP，图片缓存由来源网站控制；公开模式可能使用 Google、DuckDuckGo 备用图标，私人模式不启用这些自动备用来源。</p>
         {iconCacheError && <p className="form-error" role="alert">{iconCacheError}</p>}
-      </section>
+      </SettingsSection>
       <WebDavSettings onNotify={onNotify} />
       <S3Settings onNotify={onNotify} />
     </div>

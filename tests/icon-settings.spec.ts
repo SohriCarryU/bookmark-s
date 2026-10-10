@@ -42,6 +42,7 @@ test('an administrator can persist icon loading preferences, reload, and re-enab
     await setIconCache(context.request, true);
     await page.goto('/?view=settings');
     const card = page.getByRole('region', { name: '网站图标', exact: true });
+    await card.getByRole('button', { name: '网站图标', exact: true }).click();
     const control = card.getByRole('switch', { name: '服务器缓存图标', exact: true });
     await expect(control).toHaveAttribute('aria-checked', 'true');
     await expect(card).toContainText('Cloudflare');
@@ -50,6 +51,7 @@ test('an administrator can persist icon loading preferences, reload, and re-enab
     await toggleIconCache(page, control, false);
     expect(await settings(context.request)).toEqual({ ...original, cacheSiteIcons: false });
     await page.reload();
+    await card.getByRole('button', { name: '网站图标', exact: true }).click();
     await expect(control).toHaveAttribute('aria-checked', 'false');
 
     await page.setViewportSize({ width: 320, height: 844 });
@@ -59,6 +61,7 @@ test('an administrator can persist icon loading preferences, reload, and re-enab
     await toggleIconCache(page, control, true);
     expect(await settings(context.request)).toEqual({ ...original, cacheSiteIcons: true });
     await page.reload();
+    await card.getByRole('button', { name: '网站图标', exact: true }).click();
     await expect(control).toHaveAttribute('aria-checked', 'true');
   } finally {
     await setIconCache(context.request, original.cacheSiteIcons);
@@ -84,6 +87,7 @@ test('a failed icon preference save rolls back the switch, prevents concurrent c
     await setIconCache(context.request, true);
     await page.goto('/?view=settings');
     const card = page.getByRole('region', { name: '网站图标', exact: true });
+    await card.getByRole('button', { name: '网站图标', exact: true }).click();
     const control = card.getByRole('switch', { name: '服务器缓存图标', exact: true });
     await expect(control).toHaveAttribute('aria-checked', 'true');
     const failed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings' && response.request().method() === 'PATCH');
@@ -92,6 +96,7 @@ test('a failed icon preference save rolls back the switch, prevents concurrent c
     await expect(control).toHaveAttribute('aria-checked', 'false');
     await expect(control).toHaveAttribute('aria-busy', 'true');
     await expect(control).toBeDisabled();
+    await page.getByRole('button', { name: '用户权限', exact: true }).click();
     await expect(page.getByRole('switch', { name: '允许用户添加书签', exact: true })).toBeDisabled();
 
     release.resolve();

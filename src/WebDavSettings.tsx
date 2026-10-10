@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CheckCircle2, Clock3, CloudUpload, FolderSync, LoaderCircle, Save, TriangleAlert, Unplug, XCircle } from "lucide-react";
 import type { WebDavSettings as Settings, WebDavSettingsInput } from "../shared/webdav";
 import { api, messageOf } from "./api";
+import SettingsSection from "./SettingsSection";
 import "./webdav-settings.css";
 
 const path = "/settings/webdav";
@@ -191,14 +192,13 @@ export default function WebDavSettings({ onNotify }: {
   const cleanupWarning = status === "success" ? last?.cleanupWarning : null;
 
   return (
-    <section className="settings-card webdav-settings" aria-labelledby={`${id}-heading`}>
-      <div className="settings-card-heading">
-        <span className="settings-section-icon"><CloudUpload size={19} aria-hidden="true" /></span>
-        <div>
-          <h2 id={`${id}-heading`}>WebDAV 备份</h2>
-          <p>将书签、文件夹、标签、个人收藏、账号、访问设置和操作记录等数据备份到你的 WebDAV。</p>
-        </div>
-      </div>
+    <SettingsSection
+      headingId={`${id}-heading`}
+      title="WebDAV 备份"
+      description="将书签、文件夹、标签、个人收藏、账号、访问设置和操作记录等数据备份到你的 WebDAV。"
+      icon={<CloudUpload size={19} aria-hidden="true" />}
+      className="webdav-settings"
+    >
       {loading ? (
         <div className="settings-list-status" role="status"><LoaderCircle size={18} className="spin" aria-hidden="true" />正在加载备份配置…</div>
       ) : loadError ? (
@@ -319,6 +319,6 @@ export default function WebDavSettings({ onNotify }: {
           </div>
         </>
       ) : null}
-    </section>
+    </SettingsSection>
   );
 }
