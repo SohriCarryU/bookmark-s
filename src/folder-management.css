@@ -21,6 +21,21 @@
 .folder-preview-footer > button { font-size: 12px; }
 .folder-deletion-body > .form-error { margin-top: 17px; margin-bottom: 0; }
 .folder-deletion-footer { flex-wrap: wrap; }
+.folder-order-body { min-width: 0; }
+.folder-order-list { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.folder-order-row { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 11px 12px; border: 1px solid #e0e7d7; border-radius: 9px; background: #fff; }
+.folder-order-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; background: #f4f7ef; }
+.folder-order-name { flex: 1; min-width: 0; color: var(--text-secondary); font-size: 14px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.folder-order-actions { display: flex; flex: 0 0 auto; gap: 4px; }
+.folder-order-actions .icon-button { width: 34px; height: 34px; padding: 8px; border: 1px solid #e4eade; border-radius: 7px; color: #638452; background: #f8faf5; }
+.folder-order-actions .icon-button:hover:not(:disabled) { color: #3e693d; background: #eaf2e3; }
+.folder-order-actions .icon-button:disabled { cursor: default; opacity: .35; }
+.folder-order-note { color: var(--muted); font-size: 12px; line-height: 1.8; margin: 13px 0 0; }
+.folder-order-error { margin-top: 18px; }
+.folder-order-error .form-error { margin: 0 0 10px; }
+.folder-order-error .text-button { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.folder-order-error .folder-order-note { margin-top: 7px; }
+.folder-order-footer { flex-wrap: wrap; }
 @media (max-width: 480px) {
   .folder-deletion-counts { gap: 9px; }
   .folder-deletion-counts > div { padding: 11px; }
@@ -28,4 +43,7 @@
   .folder-deletion-preserve p { font-size: 12px; }
   .folder-migration-field select { font-size: 16px; }
   .folder-deletion-footer > button { flex: 1; }
+  .folder-order-row { gap: 9px; padding: 10px; }
+  .folder-order-icon { flex-basis: 26px; width: 26px; height: 28px; }
+  .folder-order-footer > button { flex: 1; }
 }

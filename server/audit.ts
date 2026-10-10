@@ -62,20 +62,21 @@ const categoryMetadata = (id: string) => `(SELECT json_object('id',c.id,'name',c
 
 const content = (snapshot: string) => `json_remove(${snapshot},'$.clicks')`
 
-function captureBefore(id: string, targets: AuditTargets): Statement[] {
+function captureBefore(id: string, targets: AuditTargets, includeCategoryAssociations = true): Statement[] {
+  const relatedCategoryIds = includeCategoryAssociations ? targets.categoryIds ?? [] : []
   return [
     { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT bookmark_id FROM bookmark_tags WHERE tag_id IN (SELECT value FROM json_each(?))
       UNION SELECT bookmark_id FROM bookmark_categories WHERE category_id IN (SELECT value FROM json_each(?)))
       INSERT INTO operation_changes (operation_id,bookmark_id,before_json,before_revision)
       SELECT ?,selected.id,${bookmarkSnapshot('selected.id')},COALESCE((SELECT revision FROM bookmark_revisions WHERE bookmark_id = selected.id),0) FROM selected`,
-      params: [JSON.stringify(targets.bookmarkIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(targets.categoryIds ?? []), id] },
+      params: [JSON.stringify(targets.bookmarkIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(relatedCategoryIds), id] },
     { sql: `INSERT INTO operation_tag_changes (operation_id,tag_id,before_json)
       SELECT ?,selected.value,${tagSnapshot('selected.value')} FROM json_each(?) selected`, params: [id, JSON.stringify(targets.tagIds ?? [])] },
     { sql: `WITH selected(id) AS (SELECT value FROM json_each(?) UNION SELECT submission_id FROM submission_tags WHERE tag_id IN (SELECT value FROM json_each(?))
       UNION SELECT submission_id FROM submission_categories WHERE category_id IN (SELECT value FROM json_each(?)))
       INSERT INTO operation_submission_changes (operation_id,submission_id,before_json)
       SELECT ?,selected.id,${submissionSnapshot('selected.id')} FROM selected`,
-      params: [JSON.stringify(targets.submissionIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(targets.categoryIds ?? []), id] },
+      params: [JSON.stringify(targets.submissionIds ?? []), JSON.stringify(targets.tagIds ?? []), JSON.stringify(relatedCategoryIds), id] },
     { sql: `INSERT INTO operation_category_changes (operation_id,category_id,before_json)
       SELECT ?,selected.value,${categorySnapshot('selected.value')} FROM json_each(?) selected`, params: [id, JSON.stringify(targets.categoryIds ?? [])] },
   ]
@@ -105,7 +106,8 @@ export async function auditedMutation(db: Database, action: string, actor: Actor
   const id = crypto.randomUUID()
   await db.batch([
     { sql: 'INSERT INTO operations (id,action,actor_id,actor_name) VALUES (?,?,?,?)', params: [id, action, actor.id, actor.username] },
-    ...captureBefore(id, targets), ...statements,
+    // Folder order affects navigation only; it must never become a bookmark edit.
+    ...captureBefore(id, targets, action !== 'category_order'), ...statements,
     ...(['edit', 'batch_tags'].includes(action) ? [{
       sql: `INSERT OR IGNORE INTO bookmark_editors (bookmark_id,username)
         SELECT current_bookmark.id,? FROM operation_changes oc JOIN bookmarks current_bookmark ON current_bookmark.id = oc.bookmark_id WHERE oc.operation_id = ?
@@ -153,6 +155,9 @@ function revertReason(source: string) {
       WHERE tc.operation_id = ${source}) THEN '原标签名称已被其他标签占用，无法恢复'
     WHEN EXISTS (SELECT 1 FROM operation_category_changes cc JOIN categories c ON c.name = json_extract(cc.before_json,'$.name') COLLATE NOCASE AND c.id != cc.category_id
       WHERE cc.operation_id = ${source}) THEN '原文件夹名称已被其他文件夹占用，无法恢复'
+    WHEN EXISTS (SELECT 1 FROM operation_category_changes cc JOIN categories c ON c.sort_order = json_extract(cc.before_json,'$.sortOrder') AND c.id != cc.category_id
+      WHERE cc.operation_id = ${source} AND json_extract(cc.before_json,'$.sortOrder') IS NOT json_extract(cc.after_json,'$.sortOrder')
+      AND c.id NOT IN (SELECT category_id FROM operation_category_changes WHERE operation_id = ${source})) THEN '原文件夹位置已被其他文件夹占用，请先回退后续排序或文件夹操作'
     ELSE NULL END`
 }
 
@@ -262,7 +267,9 @@ export async function revertOperation(db: Database, source: string, actor: Actor
     await db.batch([
       { sql: `INSERT INTO operation_guards (id,valid) SELECT ?,CASE WHEN ${revertReason('op.id')} IS NULL THEN 1 ELSE 0 END FROM operations op WHERE op.id = ?`, params: [id, source] },
       { sql: "INSERT INTO operations (id,action,actor_id,actor_name,revert_of) VALUES (?,'revert',?,?,?)", params: [id, actor.id, actor.username, source] },
-      ...captureBefore(id, { bookmarkIds: bookmarks.map(row => row.id), tagIds: tags.map(row => row.id), submissionIds: submissions.map(row => row.id), categoryIds: categories.map(row => row.id) }),
+      // The original log already enumerates affected records. Expanding folder
+      // associations here would make an order-only revert rewrite bookmarks.
+      ...captureBefore(id, { bookmarkIds: bookmarks.map(row => row.id), tagIds: tags.map(row => row.id), submissionIds: submissions.map(row => row.id), categoryIds: categories.map(row => row.id) }, false),
       ...restoreStatements(source, id),
       ...captureAfter(id),
       { sql: 'UPDATE operations SET reverted_at = (SELECT created_at FROM operations WHERE id = ?), reverted_by = ? WHERE id = ?', params: [id, actor.username, source] },

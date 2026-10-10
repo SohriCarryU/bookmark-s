@@ -11,7 +11,7 @@ const actions = [
   ["create", "添加书签"], ["edit", "编辑书签"], ["delete", "删除书签"],
   ["pin", "调整置顶"], ["batch_tags", "批量编辑标签"], ["approve", "通过网站推荐"],
   ["tag_rename", "重命名标签"], ["tag_delete", "删除标签"], ["revert", "回退操作"],
-  ["category_edit", "编辑文件夹"], ["category_delete", "删除文件夹"],
+  ["category_edit", "编辑文件夹"], ["category_order", "文件夹排序"], ["category_delete", "删除文件夹"],
 ] as const;
 const actionNames = Object.fromEntries(actions);
 const pageSize = 20;
@@ -83,8 +83,11 @@ function BookmarkChange({ change, initiallyOpen }: { change: OperationChange; in
 function revertDescription(operation: OperationSummary) {
   const count = operation.bookmarkCount;
   if (operation.action === "category_edit") return "将恢复文件夹之前的名称、图标和颜色。";
+  if (operation.action === "category_order") return "将恢复文件夹之前的排列顺序。";
   if (operation.action === "category_delete") return `将恢复被删文件夹，以及 ${count} 个书签和相关网站推荐的原有归属。`;
-  if (operation.categoryNames?.length && operation.action === "revert") return `将撤销这次回退，恢复文件夹及 ${count} 个书签之前的状态。`;
+  if (operation.categoryNames?.length && operation.action === "revert") return count
+    ? `将撤销这次回退，恢复文件夹及 ${count} 个书签之前的状态。`
+    : "将撤销这次回退，恢复文件夹之前的状态。";
   if (operation.action === "create" || operation.action === "approve") return `将移除本次新增的 ${count} 个书签。`;
   if (operation.action === "delete") return `将恢复本次删除的 ${count} 个书签。`;
   if (operation.action === "pin") return `将恢复 ${count} 个书签之前的置顶状态。`;
@@ -99,6 +102,7 @@ function CategorySnapshot({ category, label }: { category: Category | null; labe
       <p className="operations-category-name"><span style={{ color: category.color }}><CategoryIcon name={category.icon} size={18} /></span>{category.name}</p>
       <p className="operations-category-meta">图标：{getFolderIcon(category.icon).label}</p>
       <p className="operations-category-meta">颜色：<span className="operations-color-swatch" style={{ background: category.color }} />{category.color}</p>
+      <p className="operations-category-meta">排序序号：{category.sortOrder + 1}</p>
     </> : <p>{label === "变更前" ? "尚未创建" : "已删除"}</p>}
   </div>;
 }
@@ -259,7 +263,9 @@ export default function OperationsPage({ onChanged, onNotify }: {
       {selectedId && <section ref={detailRef} className="settings-card operations-detail" aria-label={`操作详情 ${selectedId}`}>
         <div className="operations-detail-heading"><div><h2>操作详情</h2>{activeOperation && <p>{actionName(activeOperation.action)} · @{activeOperation.actorName} · {displayTime(activeOperation.createdAt)}</p>}</div><button type="button" className="icon-button" aria-label="关闭操作详情" disabled={reverting} onClick={() => setSelectedId(null)}><X size={18} /></button></div>
         {detailLoading ? <div className="settings-list-status" role="status"><LoaderCircle className="spin" size={18} />正在加载变更详情…</div> : detailError ? <div className="settings-list-error"><p className="form-error" role="alert">{detailError}</p><button type="button" className="secondary-button" onClick={() => void loadDetail(selectedId)}>重新加载操作详情</button></div> : detail && activeOperation && <>
-          <p className="operations-detail-count">本次操作涉及 {detail.operation.bookmarkCount} 个书签{detail.changes.length > 1 ? "，展开书签可查看具体变化。" : "。"}</p>
+          <p className="operations-detail-count">{!detail.changes.length && detail.categoryChanges?.length
+            ? `本次操作涉及 ${detail.categoryChanges.length} 个文件夹。`
+            : `本次操作涉及 ${detail.operation.bookmarkCount} 个书签${detail.changes.length > 1 ? "，展开书签可查看具体变化。" : "。"}`}</p>
           {!!detail.tagChanges?.length && <section className="operations-tag-changes" aria-label="标签变更"><h3>标签变更</h3>{detail.tagChanges.map((change, index) => <div className="operations-change-pair" key={index}><div className="operations-before"><span className="operations-value-label">变更前</span><p>{change.before ? `#${change.before.name}` : "尚未创建"}</p></div><div className="operations-after"><span className="operations-value-label">变更后</span><p>{change.after ? `#${change.after.name}` : "已删除"}</p></div></div>)}</section>}
           {!!detail.categoryChanges?.length && <section className="operations-category-changes" aria-label="文件夹变更"><h3>文件夹变更</h3>{detail.categoryChanges.map((change, index) => <div className="operations-change-pair" key={index}><CategorySnapshot category={change.before} label="变更前" /><CategorySnapshot category={change.after} label="变更后" /></div>)}</section>}
           <div className="operations-bookmark-changes">{detail.changes.map((change) => <BookmarkChange key={change.bookmarkId} change={change} initiallyOpen={detail.changes.length === 1} />)}</div>

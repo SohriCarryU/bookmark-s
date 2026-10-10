@@ -46,12 +46,207 @@ test('folder mutation and deletion previews are admin-only even for users with a
     ['/api/categories/development', 'PATCH', { name: 'Forbidden' }],
     ['/api/categories/development/deletion-preview', 'GET', undefined],
     ['/api/categories/development', 'DELETE', { targetCategoryId: 'explore' }],
+    ['/api/categories/order', 'PUT', { categoryIds: ['explore', 'learning', 'productivity', 'design', 'development'] }],
   ] as const) {
     assert.equal((await request(path, method, body)).status, 401)
     assert.equal((await request(path, method, body, member)).status, 403)
   }
   assert.equal((await call('/api/operations', 'GET', undefined, owner)).total, 0)
   assert.equal((await db.get<{ name: string }>("SELECT name FROM categories WHERE id = 'development'"))?.name, '开发工具')
+})
+
+test('folder order is shared and audited without editing bookmarks, submissions, pins or favorites', async t => {
+  const { db, request, login, call, folder, bookmark, state, latest, detail } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  const item = await bookmark(owner, 'ordered-content', ['development', 'explore'])
+  await call(`/api/bookmarks/${item.id}`, 'PATCH', { pinned: true }, owner)
+  await call(`/api/bookmarks/${item.id}`, 'PATCH', { categoryId: 'development', pinned: true }, owner)
+  await call(`/api/me/favorites/${item.id}`, 'PUT', undefined, owner)
+  await call('/api/submissions', 'POST', { title: 'Order submission', url: 'https://ordered-submission.example', categoryIds: ['development', 'explore'] }, owner, 201)
+  const original = (await state(owner)).categories as Array<{ id: string; sortOrder: number }>
+  const categoryIds = original.map(category => category.id).reverse()
+  const tables = ['bookmarks', 'bookmark_categories', 'submissions', 'submission_categories', 'user_favorites', 'bookmark_editors', 'bookmark_revisions']
+  const contents = () => Promise.all(tables.map(table => db.all(`SELECT * FROM ${table} ORDER BY rowid`)))
+  const before = await contents()
+  const ordered = await call('/api/categories/order', 'PUT', { categoryIds }, owner)
+  assert.deepEqual(ordered.categories.map((category: { id: string }) => category.id), categoryIds)
+  assert.deepEqual(ordered.categories.map((category: { sortOrder: number }) => category.sortOrder), [0, 1, 2, 3, 4])
+  const guest = await request('/api/bootstrap')
+  assert.equal(guest.status, 200)
+  assert.deepEqual((await guest.json()).categories, ordered.categories)
+  await call('/api/users', 'POST', { username: 'order-reader', password: 'order-reader-password' }, owner, 201)
+  assert.deepEqual((await state(await login('order-reader', 'order-reader-password'))).categories, ordered.categories)
+  assert.deepEqual(await contents(), before)
+  const operation = await latest(owner)
+  assert.equal(operation.action, 'category_order')
+  assert.equal(operation.bookmarkCount, 0)
+  assert.deepEqual((await detail(owner, operation.id)).changes, [])
+  assert.ok((await detail(owner, operation.id)).categoryChanges.length > 0)
+  assert.equal((await call('/api/operations?action=category_order', 'GET', undefined, owner)).total, 1)
+  await call(`/api/operations/${operation.id}/revert`, 'POST', undefined, owner)
+  assert.deepEqual((await state(owner)).categories, original)
+  assert.deepEqual(await contents(), before)
+  const reversal = await latest(owner)
+  assert.equal(reversal.bookmarkCount, 0)
+  await call(`/api/operations/${reversal.id}/revert`, 'POST', undefined, owner)
+  assert.deepEqual((await state(owner)).categories, ordered.categories)
+  assert.deepEqual(await contents(), before)
+  const tail = await folder(owner, 'Appended folder')
+  assert.equal(tail.sortOrder, categoryIds.length)
+  assert.equal((await state(owner)).categories.at(-1).id, tail.id)
+})
+
+test('folder ordering validates complete permutations and leaves unchanged or empty orders out of history', async t => {
+  const { db, request, login, call, state } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  const original = (await state(owner)).categories
+  const ids = original.map((category: { id: string }) => category.id)
+  for (const body of [{}, { categoryIds: null }, { categoryIds: 'development' }, { categoryIds: [3] },
+    { categoryIds: [null] }, { categoryIds: [''] }, { categoryIds: [' development'] },
+    { categoryIds: [...ids, ids[0]] }, { categoryIds: ids, sortOrder: 0 }]) {
+    assert.equal((await request('/api/categories/order', 'PUT', body, owner)).status, 400)
+  }
+  for (const categoryIds of [[], ids.slice(1), [...ids, 'unknown'], ['unknown', ...ids.slice(1)]]) {
+    assert.equal((await request('/api/categories/order', 'PUT', { categoryIds }, owner)).status, 409)
+  }
+  assert.deepEqual((await call('/api/categories/order', 'PUT', { categoryIds: ids }, owner)).categories, original)
+  await db.run('UPDATE categories SET sort_order = sort_order * 2 + 1')
+  const withGaps = (await state(owner)).categories
+  assert.deepEqual((await call('/api/categories/order', 'PUT', { categoryIds: ids }, owner)).categories, withGaps)
+  assert.equal((await call('/api/operations', 'GET', undefined, owner)).total, 0)
+  await db.run('DELETE FROM bookmarks')
+  await db.run('DELETE FROM categories')
+  assert.deepEqual((await call('/api/categories/order', 'PUT', { categoryIds: [] }, owner)).categories, [])
+  assert.equal((await call('/api/operations', 'GET', undefined, owner)).total, 0)
+})
+
+test('folder sorting checks concurrent additions and deletions in the mutation transaction', async t => {
+  let paused: { ready: () => void; wait: Promise<void> } | undefined
+  const { db, request, login, call, folder, state } = setup(database => ({ ...database, async batch(statements: Statement[]) {
+    const gate = paused
+    if (gate) { paused = undefined; gate.ready(); await gate.wait }
+    return database.batch(statements)
+  } }))
+  t.after(() => db.close())
+  const pause = () => {
+    let ready!: () => void
+    let release!: () => void
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const wait = new Promise<void>(resolve => { release = resolve })
+    paused = { ready, wait }
+    return { started, release }
+  }
+  const owner = await login()
+  let ids = (await state(owner)).categories.map((category: { id: string }) => category.id).reverse()
+  let gate = pause()
+  const adding = request('/api/categories/order', 'PUT', { categoryIds: ids }, owner)
+  await gate.started
+  const added = await folder(owner, 'Concurrent order')
+  let before = (await state(owner)).categories
+  gate.release()
+  assert.equal((await adding).status, 409)
+  assert.deepEqual((await state(owner)).categories, before)
+  ids = before.map((category: { id: string }) => category.id).reverse()
+  gate = pause()
+  const deleting = request('/api/categories/order', 'PUT', { categoryIds: ids }, owner)
+  await gate.started
+  await call(`/api/categories/${added.id}`, 'DELETE', {}, owner)
+  // A replacement keeps the same count, so the transaction must compare IDs too.
+  await folder(owner, 'Concurrent replacement')
+  before = (await state(owner)).categories
+  gate.release()
+  assert.equal((await deleting).status, 409)
+  assert.deepEqual((await state(owner)).categories, before)
+  assert.equal((await call('/api/operations?action=category_order', 'GET', undefined, owner)).total, 0)
+  assert.deepEqual(await db.all('SELECT * FROM operation_guards'), [])
+})
+
+test('a folder appended during another pending creation keeps its own final position', async t => {
+  let paused: { ready: () => void; wait: Promise<void> } | undefined
+  const { db, request, login, folder, state } = setup(database => ({ ...database, async run(sql: string, params?: unknown[]) {
+    const gate = paused
+    if (gate && sql.startsWith('INSERT INTO categories ')) { paused = undefined; gate.ready(); await gate.wait }
+    return database.run(sql, params)
+  } }))
+  t.after(() => db.close())
+  const owner = await login()
+  let ready!: () => void
+  let release!: () => void
+  const started = new Promise<void>(resolve => { ready = resolve })
+  const wait = new Promise<void>(resolve => { release = resolve })
+  paused = { ready, wait }
+  const pending = request('/api/categories', 'POST', { name: 'AAA pending' }, owner)
+  await started
+  const first = await folder(owner, 'ZZZ first')
+  release()
+  const response = await pending
+  assert.equal(response.status, 201)
+  const second = (await response.json()).category
+  assert.equal(second.sortOrder, first.sortOrder + 1)
+  assert.deepEqual((await state(owner)).categories.slice(-2).map((category: { id: string }) => category.id), [first.id, second.id])
+})
+
+test('folder order and its audit log roll back together on a failed transaction', async t => {
+  let fail = false
+  const { db, request, login, call, state } = setup(database => ({ ...database, async batch(statements: Statement[]) {
+    if (!fail) return database.batch(statements)
+    fail = false
+    return database.batch([...statements, { sql: "INSERT INTO tags (id,name,normalized_name) VALUES ('tag-example-1','Failure','failure')" }])
+  } }))
+  t.after(() => db.close())
+  const owner = await login()
+  const before = await state(owner)
+  fail = true
+  assert.equal((await request('/api/categories/order', 'PUT', { categoryIds: before.categories.map((category: { id: string }) => category.id).reverse() }, owner)).status, 409)
+  assert.deepEqual(await state(owner), before)
+  assert.equal((await call('/api/operations', 'GET', undefined, owner)).total, 0)
+  assert.deepEqual(await db.all('SELECT * FROM operation_guards'), [])
+})
+
+test('old folder edits cannot overwrite newer order and deleted folders cannot reclaim occupied positions', async t => {
+  const { db, request, login, call, folder, state, latest, detail } = setup()
+  t.after(() => db.close())
+  const owner = await login()
+  await call('/api/categories/development', 'PATCH', { icon: 'Rocket' }, owner)
+  const edited = await latest(owner)
+  const categoryIds = (await state(owner)).categories.map((category: { id: string }) => category.id).reverse()
+  const ordered = (await call('/api/categories/order', 'PUT', { categoryIds }, owner)).categories
+  const sorting = await latest(owner)
+  assert.equal((await detail(owner, edited.id)).canRevert, false)
+  assert.equal((await request(`/api/operations/${edited.id}/revert`, 'POST', undefined, owner)).status, 409)
+  assert.deepEqual((await state(owner)).categories, ordered)
+  await call(`/api/operations/${sorting.id}/revert`, 'POST', undefined, owner)
+  assert.equal((await detail(owner, edited.id)).canRevert, true)
+  await call(`/api/operations/${edited.id}/revert`, 'POST', undefined, owner)
+  const deleted = await folder(owner, 'Deleted ordered folder')
+  await folder(owner, 'Surviving ordered folder')
+  await call(`/api/categories/${deleted.id}`, 'DELETE', {}, owner)
+  const deletion = await latest(owner)
+  const reordered = (await state(owner)).categories.map((category: { id: string }) => category.id).reverse()
+  await call('/api/categories/order', 'PUT', { categoryIds: reordered }, owner)
+  const newOrder = (await state(owner)).categories
+  assert.equal((await detail(owner, deletion.id)).canRevert, false)
+  assert.equal((await request(`/api/operations/${deletion.id}/revert`, 'POST', undefined, owner)).status, 409)
+  assert.deepEqual((await state(owner)).categories, newOrder)
+})
+
+test('folder ordering survives a database restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'bookmark-s-folder-order-'))
+  const filename = join(directory, 'data.sqlite')
+  let service = setup(undefined, filename)
+  try {
+    const owner = await service.login()
+    const categoryIds = (await service.state(owner)).categories.map((category: { id: string }) => category.id).reverse()
+    const ordered = (await service.call('/api/categories/order', 'PUT', { categoryIds }, owner)).categories
+    service.db.close()
+    service = setup(undefined, filename)
+    assert.deepEqual((await service.state(await service.login())).categories, ordered)
+  } finally {
+    service.db.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('folder edits validate partial fields, preserve content and pins, and audit even empty-folder metadata changes', async t => {

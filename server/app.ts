@@ -840,10 +840,40 @@ export function createApp(db: Database, config: AppConfig) {
     if (!/^[a-zA-Z][a-zA-Z0-9]*$/.test(icon)) throw new ApiError('分类图标格式不正确')
     if (!/^#[a-fA-F0-9]{6}$/.test(color)) throw new ApiError('分类颜色需要是六位十六进制颜色值')
     if (await db.get('SELECT id FROM categories WHERE name = ? COLLATE NOCASE', [name])) throw new ApiError('这个分类已经存在', 409)
-    const sort = await db.get<{ sortOrder: number }>('SELECT COALESCE(MAX(sort_order), -1) + 1 AS sortOrder FROM categories')
-    const category: Category = { id: crypto.randomUUID(), name, icon, color, sortOrder: sort?.sortOrder ?? 0 }
-    await db.run('INSERT INTO categories (id,name,icon,color,sort_order) VALUES (?,?,?,?,?)', [category.id, name, icon, color, category.sortOrder])
-    return c.json({ category }, 201)
+    const id = crypto.randomUUID()
+    // Determine the tail position in the insert itself, so concurrent sorting
+    // or another new folder cannot leave this folder in an outdated position.
+    await db.run('INSERT INTO categories (id,name,icon,color,sort_order) SELECT ?,?,?,?,COALESCE(MAX(sort_order), -1) + 1 FROM categories', [id, name, icon, color])
+    return c.json({ category: await db.get<Category>(`SELECT ${categoryFields} FROM categories WHERE id = ?`, [id]) }, 201)
+  })
+
+  app.put('/api/categories/order', requireAdmin, async c => {
+    const body = await readBody(c)
+    const ids = body.categoryIds
+    if (Object.keys(body).some(key => key !== 'categoryIds') || !Array.isArray(ids)
+      || ids.some(id => typeof id !== 'string' || !id || id.length > 100 || id !== id.trim())
+      || new Set(ids).size !== ids.length) throw new ApiError('请提交完整且不重复的文件夹顺序')
+    const categories = await db.all<Category>(`SELECT ${categoryFields} FROM categories ORDER BY sort_order,name`)
+    const selected = new Set(ids)
+    if (ids.length !== categories.length || categories.some(category => !selected.has(category.id))) {
+      throw new ApiError('文件夹列表已发生变化，请刷新后重新排序', 409)
+    }
+    // Leave gaps from deleted folders alone when the visible order is unchanged.
+    if (categories.every((category, index) => category.id === ids[index])) return c.json({ categories })
+    const guard = crypto.randomUUID()
+    const serialized = JSON.stringify(ids)
+    try {
+      await auditedMutation(db, 'category_order', c.get('user')!, { categoryIds: ids }, [
+        { sql: `INSERT INTO operation_guards (id,valid) SELECT ?,CASE WHEN (SELECT COUNT(*) FROM categories) = json_array_length(?)
+          AND NOT EXISTS (SELECT 1 FROM categories WHERE id NOT IN (SELECT value FROM json_each(?))) THEN 1 ELSE 0 END`, params: [guard, serialized, serialized] },
+        { sql: 'UPDATE categories SET sort_order = (SELECT CAST(key AS INTEGER) FROM json_each(?) WHERE value = categories.id)', params: [serialized] },
+        { sql: 'DELETE FROM operation_guards WHERE id = ?', params: [guard] },
+      ])
+    } catch (error) {
+      if (error instanceof Error && /AUDIT_REVERT_CONFLICT/.test(error.message)) throw new ApiError('文件夹列表已发生变化，请刷新后重新排序', 409)
+      throw error
+    }
+    return c.json({ categories: await db.all<Category>(`SELECT ${categoryFields} FROM categories ORDER BY sort_order,name`) })
   })
 
   app.patch('/api/categories/:id', requireAdmin, async c => {

@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArrowDownWideNarrow,
+  ArrowUpDown,
   ArrowUpRight,
   Bookmark as BookmarkIcon,
   Check,
@@ -47,6 +48,7 @@ import {
 import { api, messageOf } from "./api";
 import { BookmarkModal, CategoryModal, LoginModal } from "./Forms";
 import DeleteCategoryModal from "./DeleteCategoryModal";
+import CategoryOrderModal from "./CategoryOrderModal";
 import Modal from "./Modal";
 import TagFilters from "./TagFilters";
 import SettingsPage from "./SettingsPage";
@@ -68,6 +70,7 @@ type ModalState =
   | { kind: "share" }
   | { kind: "category"; category?: Category }
   | { kind: "delete-category"; category: Category }
+  | { kind: "category-order" }
   | { kind: "inbox" }
   | { kind: "review"; submission: Submission }
   | { kind: "tags" }
@@ -687,14 +690,27 @@ export default function App() {
             <p className="sidebar-section-label">
               文件夹{" "}
               {isAdmin && (
-                <button
-                  className="icon-button"
-                  aria-label="新建文件夹"
-                  title="新建文件夹"
-                  onClick={() => setModal({ kind: "category" })}
-                >
-                  <Plus size={15} />
-                </button>
+                <span className="sidebar-folder-actions">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="调整文件夹顺序"
+                    title="调整文件夹顺序"
+                    disabled={categories.length < 2}
+                    onClick={() => setModal({ kind: "category-order" })}
+                  >
+                    <ArrowUpDown size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="新建文件夹"
+                    title="新建文件夹"
+                    onClick={() => setModal({ kind: "category" })}
+                  >
+                    <Plus size={15} />
+                  </button>
+                </span>
               )}
             </p>
             <nav className="nav-list category-nav" aria-label="书签文件夹">
@@ -1565,6 +1581,20 @@ export default function App() {
             selectFilter(newCategory.id);
             setModal(null);
             setToast({ message: modal.category ? "文件夹已更新" : "文件夹已创建，添加一些喜欢的网站吧" });
+          }}
+        />
+      )}
+      {modal?.kind === "category-order" && isAdmin && (
+        <CategoryOrderModal
+          categories={categories}
+          onClose={() => setModal(null)}
+          onSaved={(sortedCategories) => {
+            setData((current) => current ? { ...current, categories: sortedCategories } : current);
+            setModal(null);
+            setToast({ message: "文件夹顺序已保存" });
+            void refreshData().catch((error) =>
+              setToast({ message: `顺序已保存，刷新内容失败：${messageOf(error)}`, error: true }),
+            );
           }}
         />
       )}
