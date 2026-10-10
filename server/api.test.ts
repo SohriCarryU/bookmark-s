@@ -101,6 +101,94 @@ test('visitor recommendations remain private until approval and cannot be approv
   assert.equal((await (await request('/api/bootstrap')).json()).bookmarks.length, 21)
 })
 
+test('approval saves the reviewed bookmark while retaining the original recommendation', async t => {
+  const { db, request, login } = setup()
+  t.after(() => db.close())
+  const cookie = await login()
+  const input = { title: 'Visitor title', url: 'https://visitor.example', description: 'Visitor description', categoryIds: ['explore', 'development'], tags: ['Visitor tag'] }
+  const { submission } = await (await request('/api/submissions', 'POST', input)).json()
+  const review = {
+    title: '  Reviewed title  ', url: 'https://REVIEWED.example:443/', description: ' Reviewed description ',
+    categoryIds: ['learning', 'design', 'learning'], tags: [' Reviewed tag ', 'reviewed TAG', 'AI'],
+    iconUrl: 'https://icons.example.com/review.svg#preview',
+  }
+  const approved = await request(`/api/submissions/${submission.id}/approve`, 'POST', review, cookie)
+  assert.equal(approved.status, 200)
+  const { bookmark } = await approved.json()
+  assert.equal(bookmark.title, 'Reviewed title')
+  assert.equal(bookmark.url, 'https://reviewed.example')
+  assert.equal(bookmark.description, 'Reviewed description')
+  assert.equal(bookmark.categoryId, 'learning')
+  assert.deepEqual(bookmark.categoryIds, ['learning', 'design'])
+  assert.deepEqual(bookmark.tags.map((tag: { name: string }) => tag.name), ['AI', 'Reviewed tag'])
+  assert.equal(bookmark.iconUrl, 'https://icons.example.com/review.svg')
+  assert.equal(bookmark.createdBy, null)
+  assert.equal(bookmark.pinned, false)
+  assert.equal(bookmark.clicks, 0)
+  const inbox = await (await request('/api/submissions', 'GET', undefined, cookie)).json()
+  assert.deepEqual(inbox.submissions.find((item: { id: string }) => item.id === submission.id), { ...submission, status: 'approved' })
+  assert.equal((await request(`/api/submissions/${submission.id}/approve`, 'POST', { title: 'A second review' }, cookie)).status, 409)
+  assert.equal((await db.all('SELECT id FROM bookmarks WHERE source_submission_id = ?', [submission.id])).length, 1)
+  const publicData = await (await request('/api/bootstrap')).json()
+  assert.ok(publicData.bookmarks.some((item: { id: string }) => item.id === bookmark.id))
+  assert.ok(publicData.tags.every((tag: { name: string }) => tag.name !== 'Visitor tag'))
+})
+
+test('partial and empty approval bodies keep omitted fields and accept the legacy single category field', async t => {
+  const { db, request, login } = setup()
+  t.after(() => db.close())
+  const cookie = await login()
+  const input = { title: 'Partial review', url: 'https://partial-review.example', description: 'Keep this description', categoryIds: ['explore', 'development'], tags: ['Keep this tag'] }
+  const { submission } = await (await request('/api/submissions', 'POST', input)).json()
+  const result = await request(`/api/submissions/${submission.id}/approve`, 'POST', { categoryId: 'learning' }, cookie)
+  assert.equal(result.status, 200)
+  const { bookmark } = await result.json()
+  assert.deepEqual(bookmark.categoryIds, ['learning'])
+  assert.equal(bookmark.title, input.title)
+  assert.equal(bookmark.description, input.description)
+  assert.deepEqual(bookmark.tags, submission.tags)
+  assert.equal(bookmark.iconUrl, null)
+  const second = await (await request('/api/submissions', 'POST', { ...input, url: 'https://empty-review.example' })).json()
+  const unchanged = await request(`/api/submissions/${second.submission.id}/approve`, 'POST', {}, cookie)
+  assert.equal(unchanged.status, 200)
+  const original = (await unchanged.json()).bookmark
+  assert.deepEqual(original.categoryIds, input.categoryIds)
+  assert.deepEqual(original.tags, second.submission.tags)
+})
+
+test('invalid review data and duplicate final URLs leave the recommendation pending and create no partial bookmark', async t => {
+  const { db, request, login } = setup()
+  t.after(() => db.close())
+  const cookie = await login()
+  const input = { title: 'Review validation', url: 'https://review-validation.example', categoryIds: ['explore'], tags: ['Original private tag'] }
+  const { submission } = await (await request('/api/submissions', 'POST', input)).json()
+  const path = `/api/submissions/${submission.id}/approve`
+  for (const body of [
+    null, [], 'review', { title: '' }, { title: 'x'.repeat(81) }, { description: 'x'.repeat(301) },
+    { url: 'javascript:alert(1)' }, { url: 'https://user:password@example.com' },
+    { categoryIds: [] }, { categoryIds: ['missing'], tags: ['Must not create'] }, { categoryId: 'missing' },
+    { tags: 'invalid' }, { tags: [''] }, { tags: Array.from({ length: 13 }, (_, index) => `Review tag ${index}`) },
+    { iconUrl: 'https://127.0.0.1/logo.png' }, { iconUrl: 'http://icons.example.com/logo.png' },
+    { createdBy: 'forged' }, { pinned: true }, { status: 'approved' },
+  ]) {
+    assert.equal((await request(path, 'POST', body, cookie)).status, 400, JSON.stringify(body))
+  }
+  assert.equal((await request(path, 'POST', { title: 'Review' }, cookie, { 'Content-Type': 'text/plain' })).status, 400)
+  assert.equal((await request(path, 'POST', { url: 'https://github.com/', tags: ['Must not create'] }, cookie)).status, 409)
+  assert.deepEqual((await (await request('/api/submissions', 'GET', undefined, cookie)).json()).submissions[0], submission)
+  assert.equal((await db.all('SELECT id FROM bookmarks')).length, 21)
+  assert.equal((await db.all('SELECT id FROM operations')).length, 0)
+  assert.equal((await db.all('SELECT id FROM operation_guards')).length, 0)
+  assert.equal(await db.get('SELECT id FROM tags WHERE name = ?', ['Must not create']), undefined)
+  // A site collected after submission can still be reviewed with a corrected URL.
+  assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 201)
+  const approved = await request(path, 'POST', { url: 'https://corrected-review.example', tags: [] }, cookie)
+  assert.equal(approved.status, 200)
+  const { bookmark } = await approved.json()
+  assert.equal(bookmark.url, 'https://corrected-review.example')
+  assert.deepEqual(bookmark.tags, [])
+})
+
 test('validates URLs and categories, prevents duplicates, and allows category creation', async t => {
   const { db, request, login } = setup()
   t.after(() => db.close())

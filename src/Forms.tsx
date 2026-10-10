@@ -16,7 +16,7 @@ import Modal from "./Modal";
 import FolderIconPicker from "./FolderIconPicker";
 import { getFolderIcon } from "./folderIcons";
 import TagEditor, { collectTagNames } from "./TagEditor";
-import type { Bookmark, BookmarkInput, Category, Tag, User } from "./types";
+import type { Bookmark, BookmarkInput, Category, Submission, Tag, User } from "./types";
 import "./forms.css";
 
 export function LoginModal({
@@ -113,6 +113,7 @@ export function LoginModal({
 export function BookmarkModal({
   kind,
   bookmark,
+  submission,
   categories,
   tags,
   defaultCategory,
@@ -120,39 +121,43 @@ export function BookmarkModal({
   onClose,
   onSaved,
 }: {
-  kind: "bookmark" | "share";
-  bookmark?: Bookmark;
   categories: Category[];
   tags: Tag[];
   defaultCategory?: string;
   canManageIcons?: boolean;
   onClose: () => void;
   onSaved: (bookmark?: Bookmark) => void;
-}) {
+} & (
+  | { kind: "bookmark" | "share"; bookmark?: Bookmark; submission?: never }
+  | { kind: "review"; bookmark?: never; submission: Submission }
+)) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const isShare = kind === "share";
+  const isReview = kind === "review";
+  const initial = isReview ? submission : bookmark;
   const canEditIcon = canManageIcons && !isShare;
   const iconInputId = useId();
   const [iconUrlDraft, setIconUrlDraft] = useState(bookmark?.iconUrl ?? "");
   const [iconError, setIconError] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>(
-    bookmark?.tags?.map((tag) => tag.name) ?? [],
+    initial?.tags?.map((tag) => tag.name) ?? [],
   );
   const [tagDraft, setTagDraft] = useState("");
   const folderId = useId();
   const [folderSearch, setFolderSearch] = useState("");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(() => {
-    const initial = bookmark?.categoryIds?.length
-      ? bookmark.categoryIds
-      : [bookmark?.categoryId ?? defaultCategory ?? categories[0]?.id ?? ""];
-    return [...new Set(initial)].filter((id) => categories.some((category) => category.id === id));
+    const categoryIds = initial?.categoryIds?.length
+      ? initial.categoryIds
+      : [initial?.categoryId ?? defaultCategory ?? categories[0]?.id ?? ""];
+    return [...new Set(categoryIds)].filter((id) => categories.some((category) => category.id === id));
   });
   const matchingCategories = categories.filter((category) =>
     category.name.toLocaleLowerCase().includes(folderSearch.trim().toLocaleLowerCase()),
   );
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (!selectedCategoryIds.length) {
       setError("请至少选择一个文件夹。");
       return;
@@ -187,9 +192,11 @@ export function BookmarkModal({
     try {
       const path = isShare
         ? "/submissions"
-        : bookmark
-          ? `/bookmarks/${bookmark.id}`
-          : "/bookmarks";
+        : isReview
+          ? `/submissions/${submission.id}/approve`
+          : bookmark
+            ? `/bookmarks/${bookmark.id}`
+            : "/bookmarks";
       const result = await api<{ bookmark?: Bookmark }>(path, {
         method: bookmark && !isShare ? "PATCH" : "POST",
         body: JSON.stringify(payload),
@@ -204,12 +211,14 @@ export function BookmarkModal({
   return (
     <Modal
       title={
-        isShare ? "分享一个好网站" : bookmark ? "编辑书签" : "收藏新的发现"
+        isShare ? "分享一个好网站" : isReview ? "编辑分享书签" : bookmark ? "编辑书签" : "收藏新的发现"
       }
       subtitle={
         isShare
           ? "有趣的灵感，实用的工具，都值得被更多人发现。"
-          : "为喜欢的网站，留一个随时能找到的位置。"
+          : isReview
+            ? "确认网站信息、所属文件夹和标签，保存后通过分享并加入收藏馆。"
+            : "为喜欢的网站，留一个随时能找到的位置。"
       }
       onClose={() => !busy && onClose()}
     >
@@ -221,8 +230,9 @@ export function BookmarkModal({
               data-autofocus
               name="title"
               required
+              disabled={busy}
               maxLength={80}
-              defaultValue={bookmark?.title ?? ""}
+              defaultValue={initial?.title ?? ""}
               placeholder="例如：Figma"
             />
           </label>
@@ -232,8 +242,9 @@ export function BookmarkModal({
               name="url"
               type="url"
               required
+              disabled={busy}
               maxLength={2048}
-              defaultValue={bookmark?.url ?? ""}
+              defaultValue={initial?.url ?? ""}
               placeholder="https://example.com"
             />
           </label>
@@ -325,7 +336,8 @@ export function BookmarkModal({
               name="description"
               maxLength={300}
               rows={3}
-              defaultValue={bookmark?.description ?? ""}
+              disabled={busy}
+              defaultValue={initial?.description ?? ""}
               placeholder="这个网站有什么特别之处？"
             />
           </label>
@@ -348,7 +360,7 @@ export function BookmarkModal({
             onClick={onClose}
             disabled={busy}
           >
-            取消
+            {isReview ? "返回收件箱" : "取消"}
           </button>
           <button
             className="primary-button"
@@ -358,10 +370,12 @@ export function BookmarkModal({
               <LoaderCircle className="spin" size={16} />
             ) : isShare ? (
               <Send size={16} />
+            ) : isReview ? (
+              <Check size={16} />
             ) : (
               <Plus size={16} />
             )}
-            {isShare ? "提交分享" : bookmark ? "保存修改" : "添加书签"}
+            {isShare ? "提交分享" : isReview ? "通过并保存" : bookmark ? "保存修改" : "添加书签"}
           </button>
         </div>
       </form>

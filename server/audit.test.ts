@@ -424,7 +424,7 @@ test('a later tag rename blocks rollback of an earlier bookmark change', async t
   assert.deepEqual(await bookmark(id, owner), before)
 })
 
-test('approval revert removes the approved bookmark and restores its recommendation for review', async t => {
+test('edited approval records one operation and reverting it restores the original recommendation for review', async t => {
   const { db, request, login, account, list, detail, bookmark, mutate } = setup()
   t.after(() => db.close())
   const owner = await login()
@@ -433,12 +433,24 @@ test('approval revert removes the approved bookmark and restores its recommendat
   assert.equal(submitted.status, 201)
   const submission = (await submitted.json()).submission as Submission
   assert.equal((await list(owner)).total, 0)
-  const approved = await mutate(owner, 'approve', `/api/submissions/${submission.id}/approve`, 'POST')
+  const review = {
+    title: 'Reviewed resource', url: 'https://reviewed-audit.example', description: 'Reviewed description',
+    categoryIds: ['learning', 'design'], tags: ['Reviewed audit tag'], iconUrl: 'https://icons.example.com/reviewed.svg',
+  }
+  const approved = await mutate(owner, 'approve', `/api/submissions/${submission.id}/approve`, 'POST', review)
   assert.equal(approved.operation.actorName, 'admin')
   assert.equal(approved.result.bookmark.createdBy, 'submitter')
+  assert.equal(approved.result.bookmark.title, review.title)
+  assert.equal(approved.result.bookmark.url, review.url)
+  assert.equal(approved.result.bookmark.description, review.description)
+  assert.deepEqual(approved.result.bookmark.categoryIds, review.categoryIds)
+  assert.deepEqual(approved.result.bookmark.tags.map((tag: { name: string }) => tag.name), review.tags)
+  assert.equal(approved.result.bookmark.iconUrl, review.iconUrl)
   const snapshots = await detail(approved.operation.id, owner)
   assert.equal(snapshots.changes[0].before, null)
   assert.equal(snapshots.changes[0].after?.createdBy, 'submitter')
+  assert.equal(snapshots.changes[0].after?.title, review.title)
+  assert.equal(snapshots.changes[0].after?.iconUrl, review.iconUrl)
   await mutate(owner, 'revert', `/api/operations/${approved.operation.id}/revert`, 'POST')
   assert.equal(await bookmark(approved.result.bookmark.id, owner), undefined)
   const inbox = await (await request('/api/submissions', 'GET', undefined, owner)).json()
@@ -448,6 +460,51 @@ test('approval revert removes the approved bookmark and restores its recommendat
   assert.deepEqual(approvedAgain.result.bookmark.categoryIds, input.categoryIds)
   assert.deepEqual(approvedAgain.result.bookmark.tags, submission.tags)
 })
+
+for (const outcome of ['approve', 'reject'] as const) {
+  test(`a concurrent ${outcome} prevents a stale edited approval from changing the result or creating history`, { timeout: 10000 }, async t => {
+    let pauseNextBatch = false
+    let capture!: () => void
+    let release!: () => void
+    const captured = new Promise<void>(resolve => { capture = resolve })
+    const released = new Promise<void>(resolve => { release = resolve })
+    const { db, request, login, list } = setup(database => ({
+      ...database,
+      async batch(statements: Statement[]) {
+        if (pauseNextBatch) {
+          pauseNextBatch = false
+          capture()
+          await released
+        }
+        await database.batch(statements)
+      },
+    }))
+    let reviewing: ReturnType<typeof request> | undefined
+    t.after(async () => { release(); await reviewing; db.close() })
+    const owner = await login()
+    const submitted = await request('/api/submissions', 'POST', input)
+    assert.equal(submitted.status, 201)
+    const { submission } = await submitted.json()
+    pauseNextBatch = true
+    reviewing = request(`/api/submissions/${submission.id}/approve`, 'POST', {
+      title: 'Stale review', url: 'https://stale-review.example', categoryIds: ['learning'], tags: ['Uncommitted review tag'],
+    }, owner)
+    await captured
+    const handled = await request(`/api/submissions/${submission.id}/${outcome}`, 'POST', outcome === 'approve' ? { title: 'Winning review' } : undefined, owner)
+    assert.equal(handled.status, 200)
+    release()
+    const stale = await reviewing
+    assert.equal(stale.status, 409)
+    assert.match((await stale.json()).error, /已经处理/)
+    assert.equal((await list(owner)).total, outcome === 'approve' ? 1 : 0)
+    const bookmarks = await db.all<{ title: string; url: string }>('SELECT title,url FROM bookmarks WHERE source_submission_id = ?', [submission.id])
+    assert.equal(bookmarks.length, outcome === 'approve' ? 1 : 0)
+    if (outcome === 'approve') assert.deepEqual({ ...bookmarks[0] }, { title: 'Winning review', url: input.url })
+    assert.equal((await db.get<{ status: string }>('SELECT status FROM submissions WHERE id = ?', [submission.id]))!.status, outcome === 'approve' ? 'approved' : 'rejected')
+    assert.equal(await db.get('SELECT id FROM tags WHERE name = ?', ['Uncommitted review tag']), undefined)
+    assert.equal((await db.all('SELECT id FROM operation_guards')).length, 0)
+  })
+}
 
 test('a concurrent content change between revert validation and commit prevents the entire revert', { timeout: 10000 }, async t => {
   let pauseNextBatch = false

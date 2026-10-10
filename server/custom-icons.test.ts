@@ -126,7 +126,7 @@ test('custom icon validation rejects unsafe addresses and invalid types without 
   assert.equal(await db.get('SELECT id FROM bookmarks WHERE url = ?', [input.url]), undefined)
 })
 
-test('recommendations cannot carry custom icons and approval keeps automatic discovery', async t => {
+test('recommendations cannot carry custom icons but administrators can choose one during approval', async t => {
   const { db, request, call, login, account } = setup()
   t.after(() => db.close())
   const owner = await login()
@@ -140,8 +140,11 @@ test('recommendations cannot carry custom icons and approval keeps automatic dis
   const { submission } = await call('/api/submissions', 'POST', { ...input, icon_url: iconUrl }, member.cookie)
   assert.equal(Object.hasOwn(submission, 'iconUrl'), false)
   assert.equal(Object.hasOwn(submission, 'icon_url'), false)
+  assert.equal((await request(`/api/submissions/${submission.id}/approve`, 'POST', { iconUrl })).status, 401)
+  assert.equal((await request(`/api/submissions/${submission.id}/approve`, 'POST', { iconUrl }, member.cookie)).status, 403)
   const approved = await call(`/api/submissions/${submission.id}/approve`, 'POST', { iconUrl }, owner)
-  assert.equal(approved.bookmark.iconUrl, null)
+  assert.equal(approved.bookmark.iconUrl, iconUrl)
+  assert.equal(approved.bookmark.createdBy, 'icon-reviewer')
 })
 
 test('icon-only edits record the administrator, expose before/after values and safely restore changed, cleared and deleted icons', async t => {

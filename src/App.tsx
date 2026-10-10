@@ -69,6 +69,7 @@ type ModalState =
   | { kind: "category"; category?: Category }
   | { kind: "delete-category"; category: Category }
   | { kind: "inbox" }
+  | { kind: "review"; submission: Submission }
   | { kind: "tags" }
   | { kind: "batch-tags"; mode: "add" | "remove"; bookmarkIds: string[] }
   | { kind: "bookmark"; bookmark?: Bookmark }
@@ -542,25 +543,21 @@ export default function App() {
       setWorkingId(null);
     }
   }
-  async function review(submission: Submission, approved: boolean) {
+  async function rejectSubmission(submission: Submission) {
     setWorkingId(submission.id);
     try {
-      const result = await api<{ bookmark?: Bookmark }>(
-        `/submissions/${submission.id}/${approved ? "approve" : "reject"}`,
+      await api(
+        `/submissions/${submission.id}/reject`,
         { method: "POST" },
       );
-      if (result.bookmark) updateBookmark(result.bookmark);
-      if (result.bookmark) await refreshData();
       setSubmissions((current) =>
         current.map((item) =>
           item.id === submission.id
-            ? { ...item, status: approved ? "approved" : "rejected" }
+            ? { ...item, status: "rejected" }
             : item,
         ),
       );
-      setToast({
-        message: approved ? "已通过分享，网站已加入书签" : "已拒绝这条分享",
-      });
+      setToast({ message: "已拒绝这条分享" });
     } catch (error) {
       setToast({ message: messageOf(error), error: true });
     } finally {
@@ -1527,6 +1524,28 @@ export default function App() {
           }}
         />
       )}
+      {modal?.kind === "review" && isAdmin && (
+        <BookmarkModal
+          key={modal.submission.id}
+          kind="review"
+          submission={modal.submission}
+          categories={categories}
+          tags={tags}
+          canManageIcons={isAdmin}
+          onClose={() => setModal({ kind: "inbox" })}
+          onSaved={(bookmark) => {
+            if (bookmark) updateBookmark(bookmark);
+            setSubmissions((current) => current.map((item) =>
+              item.id === modal.submission.id ? { ...item, status: "approved" } : item,
+            ));
+            setModal({ kind: "inbox" });
+            setToast({ message: "已通过分享，书签已按编辑内容保存" });
+            void refreshData().catch((error) =>
+              setToast({ message: `书签已保存，刷新内容失败：${messageOf(error)}`, error: true }),
+            );
+          }}
+        />
+      )}
       {modal?.kind === "category" && (
         <CategoryModal
           key={modal.category?.id ?? "new"}
@@ -1714,22 +1733,22 @@ export default function App() {
                             <button
                               className="secondary-button"
                               disabled={!!workingId}
-                              onClick={() => void review(item, false)}
+                              onClick={() => void rejectSubmission(item)}
                             >
-                              <X size={14} />
+                              {workingId === item.id ? (
+                                <LoaderCircle className="spin" size={14} />
+                              ) : (
+                                <X size={14} />
+                              )}
                               拒绝
                             </button>
                             <button
                               className="primary-button"
                               disabled={!!workingId}
-                              onClick={() => void review(item, true)}
+                              onClick={() => setModal({ kind: "review", submission: item })}
                             >
-                              {workingId === item.id ? (
-                                <LoaderCircle className="spin" size={14} />
-                              ) : (
-                                <Check size={14} />
-                              )}
-                              通过并收藏
+                              <Pencil size={14} />
+                              通过并编辑
                             </button>
                           </div>
                         ) : (

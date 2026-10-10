@@ -930,7 +930,7 @@ export function createApp(db: Database, config: AppConfig) {
       { key: user ? `submission:user:${user.id}` : `submission:visitor:${c.get('visitorId')}`, max: 5, seconds: 60 * 60 },
     ])
     const body = await readBody(c)
-    if (Object.hasOwn(body, 'iconUrl')) throw new ApiError('推荐书签不支持自定义图标，请由管理员收录后设置')
+    if (Object.hasOwn(body, 'iconUrl')) throw new ApiError('推荐书签不支持自定义图标，请由管理员审核时设置')
     const { title, url, description, categoryId, categoryIds } = await validateBookmark(body)
     const tags = tagInputs(body.tags)
     if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [url])) throw new ApiError('这个网站已经被收录啦，试试分享其他网站', 409)
@@ -950,24 +950,48 @@ export function createApp(db: Database, config: AppConfig) {
     const submission = await db.get<Submission>(`SELECT ${submissionFields} FROM submissions WHERE id = ?`, [id])
     if (!submission) throw new ApiError('这条推荐不存在', 404)
     if (submission.status !== 'pending') throw new ApiError('这条推荐已经处理过了', 409)
-    if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [submission.url])) throw new ApiError('这个网站已经被收录，可以忽略这条推荐', 409)
+    const body = c.req.raw.body ? await readBody(c) : {}
+    const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'tags', 'iconUrl']
+    if (Object.keys(body).some(key => !accepted.includes(key))) throw new ApiError('审核书签字段格式不正确')
+    const existing = (await withTags([submission], 'submission'))[0]
+    const value = await validateBookmark({ ...existing, ...body, ...('categoryId' in body && !('categoryIds' in body) ? { categoryIds: [body.categoryId] } : {}) })
+    const iconUrl = bookmarkIconUrl(body.iconUrl)
+    const tags = 'tags' in body ? tagInputs(body.tags) : undefined
+    const categoryChanged = 'categoryIds' in body || 'categoryId' in body
+    if (await db.get('SELECT id FROM bookmarks WHERE url = ?', [value.url])) throw new ApiError('这个网站已经被收录，请调整网址或忽略这条推荐', 409)
     const bookmarkId = crypto.randomUUID()
-    await auditedMutation(db, 'approve', c.get('user')!, { bookmarkIds: [bookmarkId], submissionIds: [id] }, [
-      { sql: "INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id,created_by) SELECT ?,title,url,description,category_id,id,created_by FROM submissions WHERE id = ? AND status = 'pending'", params: [bookmarkId, id] },
-      { sql: `INSERT INTO bookmark_categories (bookmark_id,category_id,position)
-        SELECT bookmarks.id,submission_categories.category_id,submission_categories.position FROM bookmarks
-        JOIN submission_categories ON submission_categories.submission_id = bookmarks.source_submission_id
-        WHERE bookmarks.source_submission_id = ?
-        ON CONFLICT(bookmark_id,category_id) DO UPDATE SET position = excluded.position`, params: [id] },
-      { sql: `INSERT OR IGNORE INTO bookmark_tags (bookmark_id,tag_id)
-        SELECT bookmarks.id, submission_tags.tag_id FROM bookmarks JOIN submission_tags
-          ON submission_tags.submission_id = bookmarks.source_submission_id
-        WHERE bookmarks.source_submission_id = ?`, params: [id] },
-      { sql: "UPDATE submissions SET status = 'approved' WHERE id = ? AND status = 'pending'", params: [id] },
-    ])
-    const bookmark = await db.get<Bookmark>(`SELECT ${bookmarkFields} FROM bookmarks WHERE source_submission_id = ?`, [id])
-    if (!bookmark) throw new ApiError('这条推荐已经处理过了', 409)
-    return c.json({ bookmark: await findBookmark(bookmark.id) })
+    const guard = crypto.randomUUID()
+    try {
+      await auditedMutation(db, 'approve', c.get('user')!, { bookmarkIds: [bookmarkId], submissionIds: [id] }, [
+        // Checking inside the transaction also prevents a stale review from
+        // accepting a recommendation another administrator just handled.
+        { sql: `INSERT INTO operation_guards (id,valid) SELECT ?,CASE WHEN EXISTS
+          (SELECT 1 FROM submissions WHERE id = ? AND status = 'pending') THEN 1 ELSE 0 END`, params: [guard, id] },
+        { sql: `INSERT INTO bookmarks (id,title,url,description,category_id,source_submission_id,created_by,icon_url)
+          SELECT ?,?,?,?,${categoryChanged ? '?' : 'category_id'},id,created_by,? FROM submissions WHERE id = ? AND status = 'pending'`,
+          params: [bookmarkId, value.title, value.url, value.description, ...(categoryChanged ? [value.categoryId] : []), iconUrl, id] },
+        ...(categoryChanged ? categoryStatements('bookmark', bookmarkId, value.categoryIds) : [{
+          sql: `INSERT INTO bookmark_categories (bookmark_id,category_id,position)
+            SELECT bookmarks.id,submission_categories.category_id,submission_categories.position FROM bookmarks
+            JOIN submission_categories ON submission_categories.submission_id = bookmarks.source_submission_id
+            WHERE bookmarks.id = ?
+            ON CONFLICT(bookmark_id,category_id) DO UPDATE SET position = excluded.position`, params: [bookmarkId],
+        }]),
+        ...(tags === undefined ? [{
+          sql: `INSERT OR IGNORE INTO bookmark_tags (bookmark_id,tag_id)
+            SELECT bookmarks.id,submission_tags.tag_id FROM bookmarks JOIN submission_tags
+              ON submission_tags.submission_id = bookmarks.source_submission_id
+            WHERE bookmarks.id = ?`, params: [bookmarkId],
+        }] : [...createTagStatements(tags), assignTagStatement('bookmark', [bookmarkId], tags)]),
+        { sql: "UPDATE submissions SET status = 'approved' WHERE id = ? AND status = 'pending'", params: [id] },
+        { sql: 'DELETE FROM operation_guards WHERE id = ?', params: [guard] },
+      ])
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('AUDIT_REVERT_CONFLICT')) throw new ApiError('这条推荐已经处理过了，请刷新收件箱', 409)
+      if (error instanceof Error && error.message.includes('FOREIGN KEY constraint')) throw new ApiError('选择的文件夹已发生变化，请重新选择后保存', 409)
+      throw error
+    }
+    return c.json({ bookmark: await findBookmark(bookmarkId) })
   })
 
   app.post('/api/submissions/:id/reject', requireAdmin, async c => {

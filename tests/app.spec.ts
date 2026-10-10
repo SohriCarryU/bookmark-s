@@ -44,7 +44,10 @@ test('recommendation, approval, folder creation and bookmark management work end
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('button', { name: /分享收件箱/ }).click();
   await expect(page.getByRole('link', { name: 'E2E 推荐网站' })).toBeVisible();
-  await page.getByRole('button', { name: '通过并收藏' }).click();
+  await page.getByRole('button', { name: '通过并编辑', exact: true }).click();
+  const review = page.getByRole('dialog', { name: '编辑分享书签', exact: true });
+  await expect(review.getByLabel('网站名称', { exact: true })).toHaveValue('E2E 推荐网站');
+  await review.getByRole('button', { name: '通过并保存', exact: true }).click();
   await expect(page.getByText('暂时没有待审核的分享')).toBeVisible();
   await page.getByRole('button', { name: '关闭弹窗' }).click();
 
