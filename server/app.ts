@@ -60,6 +60,8 @@ export interface User {
   role: 'admin' | 'user'
   canAddBookmarks: boolean
   canPinBookmarks: boolean
+  canPinCategoryBookmarks: boolean
+  canPinAllBookmarks: boolean
   isOwner: boolean
   groups?: UserGroupSummary[]
   permissions?: PermissionKey[]
@@ -81,7 +83,8 @@ interface PasswordState { passwordHash: string; sessionVersion: number }
 export interface SiteSettings {
   siteMode: 'public' | 'private'
   allowUserAddBookmarks: boolean
-  allowUserPinBookmarks: boolean
+  allowUserPinCategoryBookmarks: boolean
+  allowUserPinAllBookmarks: boolean
   cacheSiteIcons: boolean
 }
 type AppEnv = { Variables: { user: User | null; settings: SiteSettings; visitorId: string; clientIp: string } }
@@ -218,15 +221,16 @@ export function createApp(db: Database, config: AppConfig) {
   const encoder = new TextEncoder()
   const signingKey = crypto.subtle.importKey('raw', encoder.encode(config.sessionSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
   const rateLimiter = new RateLimiter()
-  const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, canPinBookmarks: true, isOwner: true }
+  const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, canPinBookmarks: true, canPinCategoryBookmarks: true, canPinAllBookmarks: true, isOwner: true }
 
   async function getSettings(): Promise<SiteSettings> {
-    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','allow_user_add_bookmarks','allow_user_pin_bookmarks','cache_site_icons')")
+    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','allow_user_add_bookmarks','allow_user_pin_category_bookmarks','allow_user_pin_all_bookmarks','cache_site_icons')")
     const values = new Map(rows.map(row => [row.key, row.value]))
     return {
       siteMode: values.get('site_mode') === 'private' ? 'private' : 'public',
       allowUserAddBookmarks: values.get('allow_user_add_bookmarks') === '1',
-      allowUserPinBookmarks: values.get('allow_user_pin_bookmarks') === '1',
+      allowUserPinCategoryBookmarks: values.get('allow_user_pin_category_bookmarks') === '1',
+      allowUserPinAllBookmarks: values.get('allow_user_pin_all_bookmarks') === '1',
       cacheSiteIcons: values.get('cache_site_icons') !== '0',
     }
   }
@@ -287,7 +291,9 @@ export function createApp(db: Database, config: AppConfig) {
     return {
       id: user.id, username: user.username, role: user.role === 'admin' || groups.some(group => group.id === 'group-admin') || user.id === owner.id ? 'admin' : 'user',
       canAddBookmarks: permissions.has('add_bookmarks') || settings.allowUserAddBookmarks,
-      canPinBookmarks: permissions.has('pin_bookmarks') || settings.allowUserPinBookmarks,
+      canPinCategoryBookmarks: permissions.has('pin_category_bookmarks') || settings.allowUserPinCategoryBookmarks,
+      canPinAllBookmarks: permissions.has('pin_all_bookmarks') || settings.allowUserPinAllBookmarks,
+      canPinBookmarks: permissions.has('pin_category_bookmarks') || permissions.has('pin_all_bookmarks') || settings.allowUserPinCategoryBookmarks || settings.allowUserPinAllBookmarks,
       isOwner: user.id === owner.id, groups, permissions: [...permissions],
     }
   }
@@ -365,7 +371,7 @@ export function createApp(db: Database, config: AppConfig) {
   async function requireBookmarkEditor(c: Context<AppEnv>, next: () => Promise<void>) {
     const user = c.get('user')
     if (!user) throw new ApiError('请先登录账户', 401)
-    if (!user.canPinBookmarks && !hasPermission(user, 'pin_bookmarks') && !hasPermission(user, 'edit_bookmarks')) throw new ApiError('当前账户没有修改书签的权限', 403)
+    if (!user.canPinBookmarks && !hasPermission(user, 'pin_category_bookmarks') && !hasPermission(user, 'pin_all_bookmarks') && !hasPermission(user, 'edit_bookmarks')) throw new ApiError('当前账户没有修改书签的权限', 403)
     await next()
   }
 
@@ -706,20 +712,23 @@ export function createApp(db: Database, config: AppConfig) {
 
   app.patch('/api/settings', requirePermission('manage_settings'), async c => {
     const body = await readBody(c)
-    const keys: Record<keyof SiteSettings, string> = {
-      siteMode: 'site_mode', allowUserAddBookmarks: 'allow_user_add_bookmarks', allowUserPinBookmarks: 'allow_user_pin_bookmarks',
+    const keys = {
+      siteMode: 'site_mode', allowUserAddBookmarks: 'allow_user_add_bookmarks', allowUserPinCategoryBookmarks: 'allow_user_pin_category_bookmarks', allowUserPinAllBookmarks: 'allow_user_pin_all_bookmarks',
       cacheSiteIcons: 'cache_site_icons',
-    }
+    } as const
     const provided = Object.keys(body)
-    if (!provided.length || provided.some(key => !Object.hasOwn(keys, key))) throw new ApiError('没有可更新的配置字段')
+    if (!provided.length || provided.some(key => !Object.hasOwn(keys, key) && key !== 'allowUserPinBookmarks')) throw new ApiError('没有可更新的配置字段')
     if ('siteMode' in body && !['public', 'private'].includes(body.siteMode as string)) throw new ApiError('请选择公开或私人模式')
-    for (const key of ['allowUserAddBookmarks', 'allowUserPinBookmarks']) {
+    for (const key of ['allowUserAddBookmarks', 'allowUserPinCategoryBookmarks', 'allowUserPinAllBookmarks', 'allowUserPinBookmarks']) {
       if (key in body && typeof body[key] !== 'boolean') throw new ApiError('用户权限开关格式不正确')
     }
     if ('cacheSiteIcons' in body && typeof body.cacheSiteIcons !== 'boolean') throw new ApiError('图标缓存开关格式不正确')
-    await db.batch(provided.map(key => ({
+    const changes = provided.flatMap(key => key === 'allowUserPinBookmarks'
+      ? [['allow_user_pin_category_bookmarks', body[key]], ['allow_user_pin_all_bookmarks', body[key]]]
+      : [[keys[key as keyof typeof keys], body[key]]])
+    await db.batch(changes.map(([key, value]) => ({
       sql: 'INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      params: [keys[key as keyof SiteSettings], typeof body[key] === 'boolean' ? body[key] ? '1' : '0' : body[key]],
+      params: [key, typeof value === 'boolean' ? value ? '1' : '0' : value],
     })))
     return c.json(await getSettings())
   })
@@ -918,7 +927,13 @@ export function createApp(db: Database, config: AppConfig) {
     const pinOnly = Object.hasOwn(body, 'pinned') && keys.every(key => ['pinned', 'categoryId'].includes(key))
     const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags', 'iconUrl']
     if (!keys.length) throw new ApiError('没有可更新的书签字段')
-    if (pinOnly && !c.get('user')!.canPinBookmarks && !hasPermission(c.get('user')!, 'pin_bookmarks')) throw new ApiError('当前账户没有置顶书签的权限', 403)
+    if (pinOnly) {
+      const user = c.get('user')!
+      const categoryPin = Object.hasOwn(body, 'categoryId')
+      if (categoryPin ? !user.canPinCategoryBookmarks && !hasPermission(user, 'pin_category_bookmarks') : !user.canPinAllBookmarks && !hasPermission(user, 'pin_all_bookmarks')) {
+        throw new ApiError(`当前账户没有置顶${categoryPin ? '文件夹' : '全部'}书签的权限`, 403)
+      }
+    }
     if (!pinOnly && !hasPermission(c.get('user')!, 'edit_bookmarks')) throw new ApiError('当前账户没有编辑书签的权限', 403)
     if (keys.some(key => !accepted.includes(key))) throw new ApiError('没有可更新的书签字段')
     const existing = await findBookmark(id)

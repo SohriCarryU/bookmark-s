@@ -76,7 +76,7 @@ test('custom icon changes require a current administrator even for users allowed
   t.after(() => db.close())
   const owner = await login()
   const member = await account(owner, 'icon-member')
-  await call('/api/settings', 'PATCH', { allowUserAddBookmarks: true, allowUserPinBookmarks: true }, owner)
+  await call('/api/settings', 'PATCH', { allowUserAddBookmarks: true, allowUserPinCategoryBookmarks: true, allowUserPinAllBookmarks: true }, owner)
   for (const value of [iconUrl, null, '', false, {}]) {
     assert.equal((await request('/api/bookmarks', 'POST', { ...input, iconUrl: value }, member.cookie)).status, 403)
     assert.equal((await request('/api/bookmarks/github', 'PATCH', { iconUrl: value }, member.cookie)).status, 403)

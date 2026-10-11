@@ -37,13 +37,15 @@ export type User = {
   role: "admin" | "user";
   canAddBookmarks: boolean;
   canPinBookmarks: boolean;
+  canPinCategoryBookmarks?: boolean;
+  canPinAllBookmarks?: boolean;
   isOwner: boolean;
   groups?: UserGroup[];
   permissions?: PermissionKey[];
 };
 export type PermissionKey =
   | "manage_users" | "manage_groups" | "manage_settings"
-  | "add_bookmarks" | "edit_bookmarks" | "delete_bookmarks" | "pin_bookmarks"
+  | "add_bookmarks" | "edit_bookmarks" | "delete_bookmarks" | "pin_category_bookmarks" | "pin_all_bookmarks"
   | "manage_tags" | "manage_categories" | "review_submissions" | "view_operations";
 export type UserGroup = {
   id: string;
@@ -57,7 +59,10 @@ export type UserGroup = {
 export type SiteSettings = {
   siteMode: "public" | "private";
   allowUserAddBookmarks: boolean;
-  allowUserPinBookmarks: boolean;
+  /** @deprecated Compatibility alias for clients before scoped pin permissions. */
+  allowUserPinBookmarks?: boolean;
+  allowUserPinCategoryBookmarks?: boolean;
+  allowUserPinAllBookmarks?: boolean;
   cacheSiteIcons: boolean;
 };
 export type Submission = {
@@ -80,7 +85,9 @@ export type Bootstrap = {
   user: User | null;
   siteMode: "public" | "private";
   allowUserAddBookmarks: boolean;
-  allowUserPinBookmarks: boolean;
+  allowUserPinBookmarks?: boolean;
+  allowUserPinCategoryBookmarks?: boolean;
+  allowUserPinAllBookmarks?: boolean;
   cacheSiteIcons: boolean;
   canViewContent: boolean;
   stats: {

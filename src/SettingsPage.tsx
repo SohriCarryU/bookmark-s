@@ -7,10 +7,10 @@ import S3Settings from "./S3Settings";
 import SettingsSection from "./SettingsSection";
 import "./settings.css";
 
-type PermissionKey = "allowUserAddBookmarks" | "allowUserPinBookmarks";
+type PermissionKey = "allowUserAddBookmarks" | "allowUserPinCategoryBookmarks" | "allowUserPinAllBookmarks";
 
 function withDefaults(settings: SiteSettings): SiteSettings {
-  return { ...settings, cacheSiteIcons: settings.cacheSiteIcons ?? true };
+  return { ...settings, cacheSiteIcons: settings.cacheSiteIcons ?? true, allowUserPinCategoryBookmarks: settings.allowUserPinCategoryBookmarks ?? settings.allowUserPinBookmarks ?? false, allowUserPinAllBookmarks: settings.allowUserPinAllBookmarks ?? settings.allowUserPinBookmarks ?? false };
 }
 
 export default function SettingsPage({
@@ -32,7 +32,7 @@ export default function SettingsPage({
 
   useEffect(() => {
     setSaved(withDefaults(settings));
-  }, [settings.siteMode, settings.allowUserAddBookmarks, settings.allowUserPinBookmarks, settings.cacheSiteIcons]);
+  }, [settings.siteMode, settings.allowUserAddBookmarks, settings.allowUserPinBookmarks, settings.allowUserPinCategoryBookmarks, settings.allowUserPinAllBookmarks, settings.cacheSiteIcons]);
   useEffect(() => setMode(settings.siteMode), [settings.siteMode]);
 
   async function refreshSession() {
@@ -77,7 +77,7 @@ export default function SettingsPage({
         body: JSON.stringify({ [key]: enabled }),
       });
       setSaved(withDefaults(result));
-      onNotify(`已${enabled ? "开启" : "关闭"}用户${key === "allowUserAddBookmarks" ? "添加" : "置顶"}书签权限`);
+      onNotify(`已${enabled ? "开启" : "关闭"}用户${key === "allowUserAddBookmarks" ? "添加" : key === "allowUserPinCategoryBookmarks" ? "置顶文件夹" : "置顶全部"}书签权限`);
       await refreshSession();
     } catch (error) {
       setSaved(previous);
@@ -112,7 +112,8 @@ export default function SettingsPage({
 
   const permissions: { key: PermissionKey; label: string; description: string }[] = [
     { key: "allowUserAddBookmarks", label: "允许用户添加书签", description: "开启后为所有已登录用户额外授予添加权限；关闭后仍可由用户组单独授予。" },
-    { key: "allowUserPinBookmarks", label: "允许用户置顶书签", description: "开启后为所有已登录用户额外授予置顶权限；关闭后仍可由用户组单独授予。" },
+    { key: "allowUserPinCategoryBookmarks", label: "允许用户置顶文件夹书签", description: "开启后为所有已登录用户额外授予在当前文件夹置顶书签的权限；关闭后仍可由用户组单独授予。" },
+    { key: "allowUserPinAllBookmarks", label: "允许用户置顶全部书签", description: "开启后为所有已登录用户额外授予在“全部书签”中置顶的权限；关闭后仍可由用户组单独授予。" },
   ];
 
   return (

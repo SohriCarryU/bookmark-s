@@ -127,11 +127,14 @@ export default function App() {
   const categories = data?.categories ?? [];
   const bookmarks = data?.bookmarks ?? [];
   const tags = data?.tags ?? [];
+  const category = categories.find((item) => item.id === filter);
   const permissions = new Set(data?.user?.permissions ?? []);
   const can = (permission: PermissionKey) => !!data?.user && (data.user.isOwner || permissions.has(permission));
   const isAdmin = can("manage_users");
   const canAddBookmarks = can("add_bookmarks") || !!data?.allowUserAddBookmarks;
-  const canPinBookmarks = can("pin_bookmarks") || !!data?.allowUserPinBookmarks;
+  const canPinCategoryBookmarks = can("pin_category_bookmarks") || data?.user?.canPinCategoryBookmarks || !!data?.allowUserPinCategoryBookmarks || !!data?.allowUserPinBookmarks;
+  const canPinAllBookmarks = can("pin_all_bookmarks") || data?.user?.canPinAllBookmarks || !!data?.allowUserPinAllBookmarks || !!data?.allowUserPinBookmarks;
+  const canPinBookmarks = category ? canPinCategoryBookmarks : canPinAllBookmarks;
   const canManageUsers = can("manage_users");
   const canManageGroups = can("manage_groups");
   const canManageSettings = can("manage_settings");
@@ -307,7 +310,6 @@ export default function App() {
     if (canReviewSubmissions) void loadInbox();
     else setSubmissions([]);
   }, [canReviewSubmissions, loadInbox]);
-  const category = categories.find((item) => item.id === filter);
   const isPinnedHere = useCallback((bookmark: Bookmark) => category
     ? (bookmark.pinnedCategoryIds ?? (bookmark.pinned ? [bookmark.categoryId] : [])).includes(category.id)
     : bookmark.pinned, [category]);
@@ -910,7 +912,7 @@ export default function App() {
           {canManageSettings && view === "settings" ? (
             <main className="main-content">
               <SettingsPage
-                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinBookmarks: data!.allowUserPinBookmarks, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
+                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinCategoryBookmarks: data!.allowUserPinCategoryBookmarks, allowUserPinAllBookmarks: data!.allowUserPinAllBookmarks, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
                 onChanged={refreshData}
                 onNotify={(message, error) => setToast({ message, error })}
               />

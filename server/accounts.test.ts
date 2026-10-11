@@ -38,7 +38,7 @@ test('admin manages accounts with salted hashes, validated names, and an immutab
   assert.equal((await request('/api/users')).status, 401)
   const owner = await login()
   const users = await (await request('/api/users', 'GET', undefined, owner)).json()
-  assert.deepEqual(users.users, [{ id: 'owner', username: 'admin', role: 'admin', canAddBookmarks: true, canPinBookmarks: true, isOwner: true }])
+  assert.deepEqual(users.users, [{ id: 'owner', username: 'admin', role: 'admin', canAddBookmarks: true, canPinBookmarks: true, canPinCategoryBookmarks: true, canPinAllBookmarks: true, isOwner: true }])
   for (const changes of [{ role: 'user' }, { canAddBookmarks: false }, { password: 'another-valid-password' }]) {
     assert.equal((await request('/api/users/owner', 'PATCH', changes, owner)).status, 403)
   }
@@ -131,23 +131,25 @@ test('site permissions apply to all existing sessions independently and ignore o
   const cookies = [await login(first.username, password), await login(second.username, password)]
   // Old installations may still contain individual grants; these must not affect capabilities.
   await db.run('UPDATE users SET can_add_bookmarks = 1 WHERE id = ?', [first.id])
-  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true }
+  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
-  for (const [allowUserAddBookmarks, allowUserPinBookmarks] of [[false, false], [true, false], [false, true], [true, true], [false, false]]) {
-    const response = await request('/api/settings', 'PATCH', { allowUserAddBookmarks, allowUserPinBookmarks }, owner)
+  for (const [allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks] of [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, true], [false, false, false]]) {
+    const response = await request('/api/settings', 'PATCH', { allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks }, owner)
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinBookmarks, cacheSiteIcons: true })
+    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks, cacheSiteIcons: true })
     for (const [index, cookie] of cookies.entries()) {
       const state = await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()
       assert.equal(state.user.canAddBookmarks, allowUserAddBookmarks)
-      assert.equal(state.user.canPinBookmarks, allowUserPinBookmarks)
-      const added = await request('/api/bookmarks', 'POST', { ...input, url: `https://matrix-${index}-${allowUserAddBookmarks}-${allowUserPinBookmarks}.example` }, cookie)
+      assert.equal(state.user.canPinCategoryBookmarks, allowUserPinCategoryBookmarks)
+      assert.equal(state.user.canPinAllBookmarks, allowUserPinAllBookmarks)
+      assert.equal(state.user.canPinBookmarks, allowUserPinCategoryBookmarks || allowUserPinAllBookmarks)
+      const added = await request('/api/bookmarks', 'POST', { ...input, url: `https://matrix-${index}-${allowUserAddBookmarks}-${allowUserPinCategoryBookmarks}-${allowUserPinAllBookmarks}.example` }, cookie)
       assert.equal(added.status, allowUserAddBookmarks ? 201 : 403)
-      const pinned = await request('/api/bookmarks/github', 'PATCH', { pinned: false }, cookie)
-      assert.equal(pinned.status, allowUserPinBookmarks ? 200 : 403)
+      assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: false }, cookie)).status, allowUserPinAllBookmarks ? 200 : 403)
+      assert.equal((await request('/api/bookmarks/github', 'PATCH', { categoryId: 'development', pinned: true }, cookie)).status, allowUserPinCategoryBookmarks ? 200 : 403)
     }
     const listed = await (await request('/api/users', 'GET', undefined, owner)).json()
-    assert.ok(listed.users.filter((user: { role: string }) => user.role === 'user').every((user: { canAddBookmarks: boolean; canPinBookmarks: boolean }) => user.canAddBookmarks === allowUserAddBookmarks && user.canPinBookmarks === allowUserPinBookmarks))
+    assert.ok(listed.users.filter((user: { role: string }) => user.role === 'user').every((user: { canAddBookmarks: boolean; canPinCategoryBookmarks: boolean; canPinAllBookmarks: boolean }) => user.canAddBookmarks === allowUserAddBookmarks && user.canPinCategoryBookmarks === allowUserPinCategoryBookmarks && user.canPinAllBookmarks === allowUserPinAllBookmarks))
     const ownerState = await (await request('/api/bootstrap', 'GET', undefined, owner)).json()
     assert.equal(ownerState.user.canAddBookmarks, true)
     assert.equal(ownerState.user.canPinBookmarks, true)
@@ -162,14 +164,16 @@ test('settings partially update atomically and pin-only users cannot change any 
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
-  await request('/api/settings', 'PATCH', { allowUserPinBookmarks: true }, owner)
+  await request('/api/settings', 'PATCH', { allowUserPinCategoryBookmarks: true }, owner)
   const reader = await createUser(owner)
   assert.equal(reader.canPinBookmarks, true)
+  assert.equal(reader.canPinCategoryBookmarks, true)
+  assert.equal(reader.canPinAllBookmarks, false)
   assert.equal(reader.canAddBookmarks, false)
   const cookie = await login(reader.username, password)
-  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: true, cacheSiteIcons: true }
+  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: true, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
-  for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinBookmarks: 1 }, { siteMode: 'invalid', allowUserAddBookmarks: true }, { allowUserPinBookmarks: false, allowUserAddBookmarks: null }]) {
+  for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinCategoryBookmarks: 1 }, { allowUserPinAllBookmarks: 'no' }, { siteMode: 'invalid', allowUserAddBookmarks: true }, { allowUserPinCategoryBookmarks: false, allowUserAddBookmarks: null }]) {
     assert.equal((await request('/api/settings', 'PATCH', changes, owner)).status, 400)
     assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
   }
@@ -178,12 +182,13 @@ test('settings partially update atomically and pin-only users cannot change any 
     assert.equal((await request('/api/bookmarks/github', 'PATCH', changes, cookie)).status, 403)
     assert.deepEqual(await db.get('SELECT * FROM bookmarks WHERE id = ?', ['github']), before)
   }
-  for (const pinned of [null, 'true', 1]) assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned }, cookie)).status, 400)
-  const unpinned = await request('/api/bookmarks/github', 'PATCH', { pinned: false }, cookie)
-  assert.equal(unpinned.status, 200)
-  assert.equal((await unpinned.json()).bookmark.pinned, false)
-  assert.equal((await (await request('/api/bookmarks/github', 'PATCH', { pinned: true }, cookie)).json()).bookmark.pinned, true)
-  assert.equal((await request('/api/bookmarks/missing', 'PATCH', { pinned: true }, cookie)).status, 404)
+  for (const pinned of [null, 'true', 1]) assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned }, cookie)).status, 403)
+  const folderPin = await request('/api/bookmarks/github', 'PATCH', { categoryId: 'development', pinned: false }, cookie)
+  assert.equal(folderPin.status, 200)
+  assert.equal((await folderPin.json()).bookmark.pinnedCategoryIds.includes('development'), false)
+  assert.equal((await (await request('/api/bookmarks/github', 'PATCH', { categoryId: 'development', pinned: true }, cookie)).json()).bookmark.pinnedCategoryIds.includes('development'), true)
+  assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true }, cookie)).status, 403)
+  assert.equal((await request('/api/bookmarks/missing', 'PATCH', { pinned: true }, cookie)).status, 403)
   assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true })).status, 401)
   assert.equal((await request('/api/bookmarks/github', 'DELETE', undefined, cookie)).status, 403)
   assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, cookie)).status, 403)
@@ -193,7 +198,7 @@ test('server icon caching defaults on and only administrators can change it with
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
-  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true }
+  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
   assert.equal(await db.get("SELECT value FROM settings WHERE key = 'cache_site_icons'"), undefined)
   assert.equal((await (await request('/api/bootstrap')).json()).cacheSiteIcons, true)
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
@@ -234,14 +239,14 @@ test('server icon caching choices survive unrelated setting edits and database r
   const owner = await state.login()
   for (const cacheSiteIcons of [false, true]) {
     assert.equal((await state.request('/api/settings', 'PATCH', { cacheSiteIcons }, owner)).status, 200)
-    assert.equal((await state.request('/api/settings', 'PATCH', { allowUserPinBookmarks: true }, owner)).status, 200)
+    assert.equal((await state.request('/api/settings', 'PATCH', { allowUserPinCategoryBookmarks: true }, owner)).status, 200)
     state.db.close()
     state = setup(undefined, filename)
     const stored = await state.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'cache_site_icons'")
     assert.equal(stored?.value, cacheSiteIcons ? '1' : '0')
     const settings = await (await state.request('/api/settings', 'GET', undefined, owner)).json()
     assert.equal(settings.cacheSiteIcons, cacheSiteIcons)
-    assert.equal(settings.allowUserPinBookmarks, true)
+    assert.equal(settings.allowUserPinCategoryBookmarks, true)
     assert.equal((await (await state.request('/api/bootstrap')).json()).cacheSiteIcons, cacheSiteIcons)
   }
 })
@@ -297,7 +302,7 @@ test('private mode returns an empty anonymous bootstrap and blocks every content
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'secret' }, owner)).status, 400)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)).status, 200)
   assert.deepEqual(await (await request('/api/bootstrap')).json(), {
-    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinBookmarks: false, cacheSiteIcons: true, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
+    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   })
   for (const [path, method, body] of [
