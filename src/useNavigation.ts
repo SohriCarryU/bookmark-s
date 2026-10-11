@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap } from "./types";
+import type { PermissionKey } from "../shared/permissions";
 
 export type NavigationState = {
   view: "bookmarks" | "settings" | "users" | "personalization" | "operations";
@@ -75,9 +76,11 @@ function sameNavigation(first: NavigationState, second: NavigationState) {
 
 export function availableNavigation(state: NavigationState, data: Bootstrap | null): NavigationState {
   if (!data) return state;
-  const isAdmin = data.user?.role === "admin";
+  const permissions = new Set(data.user?.permissions ?? []);
+  const can = (permission: PermissionKey) => !!data.user && (data.user.isOwner || permissions.has(permission));
   const restrictedView = state.view === "settings" || state.view === "users" || state.view === "operations";
-  const view = (!isAdmin && restrictedView) || (!data.user && state.view === "personalization") ? "bookmarks" : state.view;
+  const allowed = state.view === "settings" ? can("manage_settings") : state.view === "users" ? (can("manage_users") || can("manage_groups")) : state.view === "operations" ? can("view_operations") : true;
+  const view = (restrictedView && !allowed) || (!data.user && state.view === "personalization") ? "bookmarks" : state.view;
   const requestedFilter = state.filter === "favorites" && !data.user ? "all" : state.filter;
   // Private guest responses deliberately contain no folders or tags. Preserve the
   // requested collection until login makes it possible to validate that content.

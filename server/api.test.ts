@@ -252,7 +252,8 @@ test('Cloudflare migration and local initialization produce the same schema and 
   migration.exec(readFileSync(new URL('../migrations/0007_category_operations.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0008_personal_favorites.sql', import.meta.url), 'utf8'))
   migration.exec(readFileSync(new URL('../migrations/0009_bookmark_icons.sql', import.meta.url), 'utf8'))
-  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users', 'bookmark_categories', 'submission_categories', 'bookmark_editors', 'user_blocked_tags', 'owner_auth', 'operations', 'operation_changes', 'operation_tag_changes', 'operation_submission_changes', 'bookmark_revisions', 'operation_guards', 'operation_category_changes', 'user_favorites', 'favorite_revert_stash']) {
+  migration.exec(readFileSync(new URL('../migrations/0010_user_groups.sql', import.meta.url), 'utf8'))
+  for (const table of ['settings', 'categories', 'submissions', 'bookmarks', 'tags', 'bookmark_tags', 'submission_tags', 'users', 'user_groups', 'user_group_members', 'bookmark_categories', 'submission_categories', 'bookmark_editors', 'user_blocked_tags', 'owner_auth', 'operations', 'operation_changes', 'operation_tag_changes', 'operation_submission_changes', 'bookmark_revisions', 'operation_guards', 'operation_category_changes', 'user_favorites', 'favorite_revert_stash']) {
     assert.deepEqual(await local.all(`PRAGMA table_info(${table})`), migration.prepare(`PRAGMA table_info(${table})`).all())
   }
   for (const sql of [
@@ -260,6 +261,8 @@ test('Cloudflare migration and local initialization produce the same schema and 
     'SELECT * FROM categories ORDER BY id',
     'SELECT id,title,url,description,category_id,clicks,pinned,source_submission_id,created_by,icon_url FROM bookmarks ORDER BY id',
     'SELECT * FROM users ORDER BY id',
+    'SELECT id,name,description,permissions,is_system,is_default FROM user_groups ORDER BY id',
+    'SELECT * FROM user_group_members ORDER BY user_id,group_id',
     'SELECT * FROM bookmark_categories ORDER BY bookmark_id,category_id',
     'SELECT * FROM submission_categories ORDER BY submission_id,category_id',
     'SELECT * FROM bookmark_editors ORDER BY bookmark_id,username',

@@ -111,8 +111,8 @@ export default function SettingsPage({
   }
 
   const permissions: { key: PermissionKey; label: string; description: string }[] = [
-    { key: "allowUserAddBookmarks", label: "允许用户添加书签", description: "开启后，所有普通用户都可以直接添加书签，并自动标注添加者。" },
-    { key: "allowUserPinBookmarks", label: "允许用户置顶书签", description: "开启后，所有普通用户都可以置顶或取消置顶收藏中的书签。" },
+    { key: "allowUserAddBookmarks", label: "允许用户添加书签", description: "开启后为所有已登录用户额外授予添加权限；关闭后仍可由用户组单独授予。" },
+    { key: "allowUserPinBookmarks", label: "允许用户置顶书签", description: "开启后为所有已登录用户额外授予置顶权限；关闭后仍可由用户组单独授予。" },
   ];
 
   return (
@@ -143,7 +143,7 @@ export default function SettingsPage({
               {mode === "private" && <Check className="settings-mode-check" size={17} aria-hidden="true" />}
             </label>
           </fieldset>
-          <p className="settings-help">访客是未登录的访问者。账号和角色可在「用户管理」中调整。</p>
+          <p className="settings-help">访客是未登录的访问者。账号和用户组可在「用户管理」中调整。</p>
           {modeError && <p className="form-error" role="alert">{modeError}</p>}
           <div className="settings-form-footer">
             <button className="primary-button" disabled={!!busy || mode === saved.siteMode}>
@@ -156,7 +156,7 @@ export default function SettingsPage({
       <SettingsSection
         headingId={`${id}-permissions-heading`}
         title="用户权限"
-        description="统一应用于所有普通用户，调整后立即保存。管理员始终拥有全部权限。"
+        description="这是面向所有已登录用户的全局附加权限，调整后立即保存。更细致的权限请在用户组中配置。"
         icon={<ShieldCheck size={19} />}
       >
         <div className="settings-permissions">

@@ -16,16 +16,13 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  Code2,
   ExternalLink,
   Folder,
   Globe2,
   Grid2X2,
   Hash,
-  Heart,
   History,
   Inbox,
-  Leaf,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -63,6 +60,7 @@ import { BatchTagsModal, ManageTagsModal } from "./TagModals";
 import useNavigation, { availableNavigation, type NavigationState } from "./useNavigation";
 import useFavorites from "./useFavorites";
 import type { Bookmark, Bootstrap, Category, Submission } from "./types";
+import type { PermissionKey } from "../shared/permissions";
 
 type ModalState =
   | null
@@ -129,9 +127,18 @@ export default function App() {
   const categories = data?.categories ?? [];
   const bookmarks = data?.bookmarks ?? [];
   const tags = data?.tags ?? [];
-  const isAdmin = data?.user?.role === "admin";
-  const canAddBookmarks = isAdmin || !!data?.user?.canAddBookmarks;
-  const canPinBookmarks = isAdmin || !!data?.user?.canPinBookmarks;
+  const permissions = new Set(data?.user?.permissions ?? []);
+  const can = (permission: PermissionKey) => !!data?.user && (data.user.isOwner || permissions.has(permission));
+  const isAdmin = can("manage_users");
+  const canAddBookmarks = can("add_bookmarks") || !!data?.allowUserAddBookmarks;
+  const canPinBookmarks = can("pin_bookmarks") || !!data?.allowUserPinBookmarks;
+  const canManageUsers = can("manage_users");
+  const canManageGroups = can("manage_groups");
+  const canManageSettings = can("manage_settings");
+  const canManageCategories = can("manage_categories");
+  const canManageTags = can("manage_tags");
+  const canViewOperations = can("view_operations");
+  const canReviewSubmissions = can("review_submissions");
   const canViewContent = data?.canViewContent ?? false;
   const hasLoadedData = data !== null;
 
@@ -231,10 +238,13 @@ export default function App() {
       if (!current || current.kind === "login") return current;
       if (!canViewContent) return null;
       if (current.kind === "share") return current;
-      if (current.kind === "bookmark") return canAddBookmarks && (!current.bookmark || isAdmin) ? current : null;
-      return isAdmin ? current : null;
+      if (current.kind === "bookmark") return canAddBookmarks && (!current.bookmark || can("edit_bookmarks")) ? current : null;
+      if (current.kind === "category" || current.kind === "delete-category" || current.kind === "category-order") return can("manage_categories") ? current : null;
+      if (current.kind === "tags" || current.kind === "batch-tags") return can("manage_tags") ? current : null;
+      if (current.kind === "review" || current.kind === "inbox") return canReviewSubmissions ? current : null;
+      return current;
     });
-  }, [canViewContent, canAddBookmarks, isAdmin]);
+  }, [canViewContent, canAddBookmarks, canReviewSubmissions, canManageCategories, canManageTags]);
   useEffect(() => {
     setJumpPage("");
     setJumpError("");
@@ -245,11 +255,11 @@ export default function App() {
     setMobileOpen(false);
   }, [historyVersion]);
   useEffect(() => {
-    if (!isAdmin) {
+    if (!canManageCategories && !canManageTags) {
       setBatchMode(false);
       setSelectedBookmarkIds([]);
     }
-  }, [isAdmin]);
+  }, [canManageCategories, canManageTags]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -294,9 +304,9 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    if (isAdmin) void loadInbox();
+    if (canReviewSubmissions) void loadInbox();
     else setSubmissions([]);
-  }, [isAdmin, loadInbox]);
+  }, [canReviewSubmissions, loadInbox]);
   const category = categories.find((item) => item.id === filter);
   const isPinnedHere = useCallback((bookmark: Bookmark) => category
     ? (bookmark.pinnedCategoryIds ?? (bookmark.pinned ? [bookmark.categoryId] : [])).includes(category.id)
@@ -657,11 +667,11 @@ export default function App() {
               <strong>
                 bookmark<span>·</span>s
               </strong>
-              <small>让收藏，井然有序</small>
+              <small>书签收藏馆</small>
             </span>
           </button>
           {canViewContent && <div className="sidebar-navigation">
-            <p className="sidebar-section-label">我的收藏馆</p>
+            <p className="sidebar-section-label">收藏馆</p>
             <nav className="nav-list">
               <button
                 className={`nav-item${view === "bookmarks" && filter === "all" ? " active" : ""}`}
@@ -689,7 +699,7 @@ export default function App() {
             <div className="sidebar-divider" />
             <p className="sidebar-section-label">
               文件夹{" "}
-              {isAdmin && (
+              {can("manage_categories") && (
                 <span className="sidebar-folder-actions">
                   <button
                     type="button"
@@ -733,14 +743,14 @@ export default function App() {
                     }
                   </span>
                 </button>
-                {isAdmin && <div className="category-nav-actions">
+                {can("manage_categories") && <div className="category-nav-actions">
                   <button type="button" className="icon-button" aria-label={`编辑文件夹 ${item.name}`} title="编辑文件夹" onClick={() => setModal({ kind: "category", category: item })}><Pencil size={13} /></button>
                   <button type="button" className="icon-button delete-icon" aria-label={`删除文件夹 ${item.name}`} title="删除文件夹" onClick={() => setModal({ kind: "delete-category", category: item })}><Trash2 size={13} /></button>
                 </div>}
                 </div>
               ))}
             </nav>
-            {isAdmin && (
+            {canReviewSubmissions && (
               <button
                 className="nav-item inbox-nav"
                 onClick={() => {
@@ -757,7 +767,7 @@ export default function App() {
                 )}
               </button>
             )}
-            {isAdmin && (
+            {canViewOperations && (
               <button
                 className={`nav-item settings-nav${view === "operations" ? " active" : ""}`}
                 aria-current={view === "operations" ? "page" : undefined}
@@ -767,7 +777,7 @@ export default function App() {
                 <span>操作记录</span>
               </button>
             )}
-            {isAdmin && (
+            {(canManageUsers || canManageGroups) && (
               <button
                 className={`nav-item settings-nav${view === "users" ? " active" : ""}`}
                 aria-current={view === "users" ? "page" : undefined}
@@ -777,7 +787,7 @@ export default function App() {
                 <span>用户管理</span>
               </button>
             )}
-            {isAdmin && (
+            {canManageSettings && (
               <button
                 className={`nav-item settings-nav${view === "settings" ? " active" : ""}`}
                 aria-current={view === "settings" ? "page" : undefined}
@@ -814,11 +824,6 @@ export default function App() {
                 分享一个好网站
               </button>
             </div>
-            <div className="sidebar-footer">
-              <span className="open-source-dot" />
-              开源 · 自由 · 共享
-              <Heart size={12} />
-            </div>
           </div>}
         </aside>
         <div className="workspace" inert={isMobile && mobileOpen}>
@@ -834,7 +839,7 @@ export default function App() {
               <Menu size={21} />
             </button>
             <div className="breadcrumb">
-              <span>我的收藏馆</span>
+              <span>收藏馆</span>
               <ChevronRight size={14} />
               <strong>
                 {view === "settings" ? "站点配置" : view === "users" ? "用户管理" : view === "operations" ? "操作记录" : view === "personalization" ? "个性化配置" : !canViewContent ? "收藏馆" : filter === "favorites"
@@ -902,7 +907,7 @@ export default function App() {
               )}
             </div>
           </header>
-          {isAdmin && view === "settings" ? (
+          {canManageSettings && view === "settings" ? (
             <main className="main-content">
               <SettingsPage
                 settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinBookmarks: data!.allowUserPinBookmarks, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
@@ -910,11 +915,11 @@ export default function App() {
                 onNotify={(message, error) => setToast({ message, error })}
               />
             </main>
-          ) : isAdmin && view === "users" ? (
+          ) : (canManageUsers || canManageGroups) && view === "users" ? (
             <main className="main-content">
-              <UsersPage currentUser={data!.user!} onChanged={refreshData} onNotify={(message, error) => setToast({ message, error })} />
+              <UsersPage currentUser={data!.user!} capabilities={{ users: canManageUsers, groups: canManageGroups }} onChanged={refreshData} onNotify={(message, error) => setToast({ message, error })} />
             </main>
-          ) : isAdmin && view === "operations" ? (
+          ) : canViewOperations && view === "operations" ? (
             <main className="main-content">
               <OperationsPage onChanged={async () => { await Promise.all([refreshData(), loadInbox()]); }} onNotify={(message, error) => setToast({ message, error })} />
             </main>
@@ -937,60 +942,6 @@ export default function App() {
               </button>
             </main>
           ) : <main className={`main-content${hasFilters ? " has-filters" : ""}`}>
-            <section className="hero" aria-labelledby="hero-heading">
-              <div className="hero-copy">
-                <h1 id="hero-heading">
-                  好网站，
-                  <br className="hero-mobile-break" />
-                  值得被<span>收藏。</span>
-                </h1>
-                <p className="hero-description">
-                  把散落的灵感，放在触手可及的地方。
-                  <br />
-                  一个安静、有序的角落，连接更有趣的互联网。
-                </p>
-                <div className="collection-badge">
-                  <span className="status-dot" />
-                  精心收藏，持续生长
-                  <Leaf size={13} />
-                </div>
-              </div>
-              <div className="hero-art" aria-hidden="true">
-                <div className="art-orbit orbit-one" />
-                <div className="art-orbit orbit-two" />
-                <div className="art-dot dot-one" />
-                <div className="art-dot dot-two" />
-                <div className="floating-tile tile-code">
-                  <Code2 size={24} />
-                </div>
-                <div className="floating-tile tile-sparkles">
-                  <Sparkles size={25} />
-                </div>
-                <div className="art-window">
-                  <div className="art-window-bar">
-                    <i />
-                    <i />
-                    <i />
-                    <span />
-                  </div>
-                  <div className="art-window-content">
-                    <span className="art-bookmark">
-                      <BookmarkIcon size={36} fill="currentColor" />
-                    </span>
-                    <span className="art-line line-one" />
-                    <span className="art-line line-two" />
-                    <div className="art-mini-tiles">
-                      <i />
-                      <i />
-                      <i />
-                    </div>
-                  </div>
-                </div>
-                <div className="floating-tile tile-cursor">
-                  <MousePointer2 size={27} fill="currentColor" />
-                </div>
-              </div>
-            </section>
             <div className="stats-strip" aria-label="收藏馆统计">
               <div className="stat-item">
                 <span className="stat-icon">
@@ -1001,7 +952,7 @@ export default function App() {
                     {loading ? "—" : number.format(bookmarks.length)}
                     <span>个</span>
                   </strong>
-                  <p>精选网站</p>
+                  <p>网站</p>
                 </div>
               </div>
               <div className="stat-item">
@@ -1013,7 +964,7 @@ export default function App() {
                     {loading ? "—" : number.format(categories.length)}
                     <span>个</span>
                   </strong>
-                  <p>主题文件夹</p>
+                  <p>主题</p>
                 </div>
               </div>
               <div className="stat-item">
@@ -1025,16 +976,8 @@ export default function App() {
                     {loading ? "—" : number.format(totalClicks)}
                     <span>次</span>
                   </strong>
-                  <p>发现与探索</p>
+                  <p>导航</p>
                 </div>
-              </div>
-              <div className="stats-note">
-                <span className="little-sparkle">✳</span>
-                <span>
-                  少一点寻找
-                  <br />
-                  <strong>多一点发现</strong>
-                </span>
               </div>
             </div>
             {spotlight && !hasFilters && (
@@ -1053,7 +996,7 @@ export default function App() {
                   <span className="spotlight-label">今日灵感</span>
                   <strong>{spotlight.title}</strong>
                   <span className="spotlight-description">
-                    {spotlight.description || "打开一个好网站，遇见新的可能。"}
+                    {spotlight.description || "点击查看网站详情。"}
                   </span>
                 </div>
                 <span className="spotlight-link">
@@ -1088,7 +1031,7 @@ export default function App() {
                   resultCount={visible.length}
                   hasFilters={hasFilters}
                   onReset={resetFilters}
-                  isAdmin={isAdmin}
+                  isAdmin={canManageTags}
                   onManage={() => setModal({ kind: "tags" })}
                 />
               )}
@@ -1132,7 +1075,7 @@ export default function App() {
                       最近添加
                     </button>
                   </div>
-                  {isAdmin && (
+                  {can("manage_categories") && (
                     <button
                       className={`secondary-button batch-mode-button${batchMode ? " active" : ""}`}
                       aria-pressed={batchMode}
@@ -1156,7 +1099,7 @@ export default function App() {
                   )}
                 </div>
               </div>
-              {isAdmin && batchMode && (
+              {can("manage_categories") && batchMode && (
                 <div className="batch-toolbar">
                   <label className="batch-select">
                     <input
@@ -1296,7 +1239,7 @@ export default function App() {
                         key={bookmark.id}
                       >
                         <div className="card-top">
-                          {isAdmin && batchMode && (
+                          {can("manage_categories") && batchMode && (
                             <label className="batch-select card-select">
                               <input
                                 type="checkbox"
@@ -1336,7 +1279,7 @@ export default function App() {
                                   disabled={sessionChanging}
                                   onClick={() => void toggleFavorite(bookmark)}
                                 />
-                                {isAdmin && <><button
+                                {can("edit_bookmarks") && <><button
                                   className="icon-button"
                                   title="编辑书签"
                                   aria-label={`编辑 ${bookmark.title}`}
@@ -1378,7 +1321,7 @@ export default function App() {
                           </span>
                           <p className="bookmark-description">
                             {bookmark.description ||
-                              "一个值得收藏的好网站，点击开启新的发现。"}
+                              "暂无网站简介。"}
                           </p>
                         </a>
                         <div
@@ -1472,15 +1415,6 @@ export default function App() {
                 </div>
               )}
             </section>
-            <footer className="workspace-footer">
-              <span>
-                用 <Heart size={11} /> 收藏互联网的一小部分
-              </span>
-              <span>
-                bookmark·s <span className="footer-version">/</span>{" "}
-                简单收藏，自由探索
-              </span>
-            </footer>
           </main>}
         </div>
       </div>
@@ -1521,7 +1455,7 @@ export default function App() {
           categories={categories}
           tags={tags}
           defaultCategory={category?.id}
-          canManageIcons={isAdmin}
+          canManageIcons={can("edit_bookmarks")}
           onClose={() => setModal(null)}
           onSaved={(bookmark) => {
             if (bookmark) updateBookmark(bookmark);
@@ -1540,14 +1474,14 @@ export default function App() {
           }}
         />
       )}
-      {modal?.kind === "review" && isAdmin && (
+      {modal?.kind === "review" && canReviewSubmissions && (
         <BookmarkModal
           key={modal.submission.id}
           kind="review"
           submission={modal.submission}
           categories={categories}
           tags={tags}
-          canManageIcons={isAdmin}
+          canManageIcons={can("edit_bookmarks")}
           onClose={() => setModal({ kind: "inbox" })}
           onSaved={(bookmark) => {
             if (bookmark) updateBookmark(bookmark);
@@ -1584,7 +1518,7 @@ export default function App() {
           }}
         />
       )}
-      {modal?.kind === "category-order" && isAdmin && (
+      {modal?.kind === "category-order" && can("manage_categories") && (
         <CategoryOrderModal
           categories={categories}
           onClose={() => setModal(null)}

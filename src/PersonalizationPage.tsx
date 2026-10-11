@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEven
 import { Hash, KeyRound, LoaderCircle, Save, Search, SlidersHorizontal, X } from "lucide-react";
 import { api, messageOf } from "./api";
 import type { TagCount, User } from "./types";
+import SettingsSection from "./SettingsSection";
 import "./settings.css";
 import "./personalization.css";
 
@@ -122,8 +123,13 @@ export default function PersonalizationPage({ user, onChanged, onNotify, onPassw
         <span className="settings-heading-icon"><SlidersHorizontal size={24} /></span>
         <div><h1>个性化</h1><p><span className="personalization-username">{user.username}</span>，为自己留出更合适的收藏空间。</p></div>
       </header>
-      <section className="settings-card" aria-labelledby={`${id}-tags-heading`}>
-        <div className="settings-card-heading"><span className="settings-section-icon"><Hash size={19} /></span><div><h2 id={`${id}-tags-heading`}>屏蔽标签</h2><p>带有任一屏蔽标签的网站，将从你的导航、搜索和统计中隐藏，不影响其他人。</p></div></div>
+      <SettingsSection
+        headingId={`${id}-tags-heading`}
+        title="屏蔽标签"
+        description="带有任一屏蔽标签的网站，将从你的导航、搜索和统计中隐藏，不影响其他人。"
+        icon={<Hash size={19} />}
+        defaultExpanded
+      >
         {loading ? <div className="settings-list-status" role="status"><LoaderCircle className="spin" size={18} />正在加载个人设置…</div> : loadError ? (
           <div className="settings-list-error"><p className="form-error" role="alert">{loadError}</p><button type="button" className="secondary-button" onClick={() => void loadPreferences()}>重新加载个人设置</button></div>
         ) : (
@@ -145,9 +151,14 @@ export default function PersonalizationPage({ user, onChanged, onNotify, onPassw
             <div className="settings-form-footer"><button className="primary-button" disabled={loading || saving || !changed}>{saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}{saving ? "保存中…" : "保存屏蔽设置"}</button></div>
           </form>
         )}
-      </section>
-      <section className="settings-card" aria-labelledby={`${id}-password-heading`}>
-        <div className="settings-card-heading"><span className="settings-section-icon"><KeyRound size={19} /></span><div><h2 id={`${id}-password-heading`}>修改密码</h2><p>先验证当前密码。更新后所有现有登录会失效，需要使用新密码重新登录。</p></div></div>
+      </SettingsSection>
+      <SettingsSection
+        headingId={`${id}-password-heading`}
+        title="修改密码"
+        description="先验证当前密码。更新后所有现有登录会失效，需要使用新密码重新登录。"
+        icon={<KeyRound size={19} />}
+        defaultExpanded
+      >
         {passwordUpdated ? <p className="personalization-password-success" role="status">密码已更新，请使用新密码重新登录。</p> : <form onSubmit={changePassword}>
           <div className="personalization-password-fields">
             <label className="form-field" htmlFor={`${id}-current-password`}>当前密码<input id={`${id}-current-password`} name="currentPassword" type="password" required maxLength={256} autoComplete="current-password" disabled={passwordBusy} placeholder="输入当前密码" /></label>
@@ -157,7 +168,7 @@ export default function PersonalizationPage({ user, onChanged, onNotify, onPassw
           {passwordError && <p className="form-error" role="alert">{passwordError}</p>}
           <div className="settings-form-footer"><button className="primary-button" disabled={passwordBusy}>{passwordBusy ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{passwordBusy ? "更新中…" : "更新密码"}</button></div>
         </form>}
-      </section>
+      </SettingsSection>
     </div>
   );
 }

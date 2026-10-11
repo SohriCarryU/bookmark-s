@@ -51,7 +51,6 @@ export default function TagFilters({
         <div className="tag-filter-title">
           <Hash size={18} />
           <h3 id="tag-filter-heading">标签筛选</h3>
-          <span>给收藏多一条线索</span>
         </div>
         <div className="tag-filter-actions">
           <label className="tag-search">

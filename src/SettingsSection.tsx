@@ -1,19 +1,20 @@
 import { useId, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 
-export default function SettingsSection({ headingId, title, description, icon, className = "", children }: {
+export default function SettingsSection({ headingId, title, description, icon, className = "", defaultExpanded = false, children }: {
   headingId?: string;
   title: string;
   description: ReactNode;
   icon: ReactNode;
   className?: string;
+  defaultExpanded?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
   const titleId = headingId ?? `${id}-heading`;
   const descriptionId = `${id}-description`;
   const contentId = `${id}-content`;
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   return (
     <section className={`settings-card settings-section${className ? ` ${className}` : ""}`} aria-labelledby={titleId}>

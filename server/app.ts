@@ -10,6 +10,7 @@ import { customSiteIconUrl, siteIconCacheVersion, siteIconOrigin } from '../shar
 import type { SiteIconResolver } from './site-icons.js'
 import type { WebDavBackupService } from './webdav-backup.js'
 import type { S3BackupService } from './s3-backup.js'
+import { allPermissions, permissionKeys, type PermissionKey } from '../shared/permissions.js'
 
 export interface AppConfig {
   adminUsername: string
@@ -60,7 +61,18 @@ export interface User {
   canAddBookmarks: boolean
   canPinBookmarks: boolean
   isOwner: boolean
+  groups?: UserGroupSummary[]
+  permissions?: PermissionKey[]
 }
+export interface UserGroupSummary {
+  id: string
+  name: string
+  description: string
+  permissions: PermissionKey[]
+  isSystem: boolean
+  isDefault: boolean
+}
+interface UserGroup extends UserGroupSummary { memberCount: number }
 interface StoredUser extends Pick<User, 'id' | 'username' | 'role'> {
   passwordHash: string
   sessionVersion: number
@@ -74,12 +86,15 @@ export interface SiteSettings {
 }
 type AppEnv = { Variables: { user: User | null; settings: SiteSettings; visitorId: string; clientIp: string } }
 const userFields = 'id, username, role, password_hash AS passwordHash, session_version AS sessionVersion'
-const asUser = (user: Pick<User, 'id' | 'username' | 'role'>, settings: SiteSettings): User => ({
-  id: user.id, username: user.username, role: user.role,
-  canAddBookmarks: user.role === 'admin' || settings.allowUserAddBookmarks,
-  canPinBookmarks: user.role === 'admin' || settings.allowUserPinBookmarks,
-  isOwner: false,
-})
+const groupPermissionKeys = new Set<string>(permissionKeys)
+function parsePermissions(value: string): PermissionKey[] {
+  try {
+    const parsed: unknown = JSON.parse(value || '[]')
+    if (!Array.isArray(parsed)) return []
+    if (parsed.includes('*')) return [...allPermissions]
+    return [...new Set(parsed.filter((item): item is PermissionKey => typeof item === 'string' && groupPermissionKeys.has(item)))]
+  } catch { return [] }
+}
 const bookmarkFields = 'id, title, url, description, category_id AS categoryId, clicks, pinned, created_at AS createdAt, created_by AS createdBy, icon_url AS iconUrl'
 const submissionFields = 'id, title, url, description, category_id AS categoryId, status, created_at AS createdAt, created_by AS createdBy'
 const categoryFields = 'id, name, icon, color, sort_order AS sortOrder'
@@ -111,6 +126,21 @@ function passwordField(value: unknown): string {
 function roleField(value: unknown): User['role'] {
   if (value !== 'admin' && value !== 'user') throw new ApiError('请选择管理员或用户权限')
   return value
+}
+
+function groupIdsField(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.length || value.length > 100
+    || value.some(id => typeof id !== 'string' || !id.trim() || id.length > 100)) {
+    throw new ApiError('请至少选择一个有效的用户组')
+  }
+  return [...new Set(value.map(id => id.trim()))]
+}
+
+function permissionsField(value: unknown): PermissionKey[] {
+  if (!Array.isArray(value) || value.length > permissionKeys.length || value.some(permission => typeof permission !== 'string' || !groupPermissionKeys.has(permission))) {
+    throw new ApiError('权限列表格式不正确')
+  }
+  return [...new Set(value)] as PermissionKey[]
 }
 
 function tagName(value: unknown): TagInput {
@@ -218,6 +248,54 @@ export function createApp(db: Database, config: AppConfig) {
     return difference === 0
   }
 
+  async function groupsForUser(userId: string): Promise<UserGroupSummary[]> {
+    const rows = await db.all<{ id: string; name: string; description: string; permissions: string; isSystem: number; isDefault: number }>(
+      `SELECT user_groups.id,user_groups.name,user_groups.description,user_groups.permissions,
+        user_groups.is_system AS isSystem,user_groups.is_default AS isDefault
+       FROM user_groups JOIN user_group_members ON user_group_members.group_id = user_groups.id
+       WHERE user_group_members.user_id = ? ORDER BY user_groups.is_system DESC,user_groups.name,user_groups.id`, [userId])
+    return rows.map(group => ({ id: group.id, name: group.name, description: group.description,
+      permissions: parsePermissions(group.permissions), isSystem: Boolean(group.isSystem), isDefault: Boolean(group.isDefault) }))
+  }
+
+  async function listGroups(): Promise<UserGroup[]> {
+    const rows = await db.all<{ id: string; name: string; description: string; permissions: string; isSystem: number; isDefault: number; memberCount: number }>(
+      `SELECT user_groups.id,user_groups.name,user_groups.description,user_groups.permissions,
+        user_groups.is_system AS isSystem,user_groups.is_default AS isDefault,COUNT(user_group_members.user_id) AS memberCount
+       FROM user_groups LEFT JOIN user_group_members ON user_group_members.group_id = user_groups.id
+       GROUP BY user_groups.id ORDER BY user_groups.is_system DESC,user_groups.name,user_groups.id`)
+    return rows.map(group => ({ id: group.id, name: group.name, description: group.description,
+      permissions: parsePermissions(group.permissions), isSystem: Boolean(group.isSystem), isDefault: Boolean(group.isDefault), memberCount: group.memberCount + (group.id === 'group-admin' ? 1 : 0) }))
+  }
+
+  async function validateGroupIds(ids: string[]) {
+    const rows = await db.all<{ id: string }>('SELECT id FROM user_groups WHERE id IN (SELECT value FROM json_each(?))', [JSON.stringify(ids)])
+    if (rows.length !== ids.length) throw new ApiError('选择的用户组不存在', 404)
+  }
+
+  async function defaultGroupIds() {
+    const groups = await db.all<{ id: string }>('SELECT id FROM user_groups WHERE is_default = 1 ORDER BY name,id')
+    if (!groups.length) throw new ApiError('请先设置至少一个默认用户组', 409)
+    return groups.map(group => group.id)
+  }
+
+  async function buildUser(user: Pick<User, 'id' | 'username' | 'role'>, settings: SiteSettings): Promise<User> {
+    const groups = user.id === owner.id ? [] : await groupsForUser(user.id)
+    const permissions = new Set<PermissionKey>()
+    if (user.id === owner.id) allPermissions.forEach(permission => permissions.add(permission))
+    for (const group of groups) group.permissions.forEach(permission => permissions.add(permission))
+    return {
+      id: user.id, username: user.username, role: user.role === 'admin' || groups.some(group => group.id === 'group-admin') || user.id === owner.id ? 'admin' : 'user',
+      canAddBookmarks: permissions.has('add_bookmarks') || settings.allowUserAddBookmarks,
+      canPinBookmarks: permissions.has('pin_bookmarks') || settings.allowUserPinBookmarks,
+      isOwner: user.id === owner.id, groups, permissions: [...permissions],
+    }
+  }
+
+  function hasPermission(user: User, permission: PermissionKey) {
+    return user.isOwner || (user.permissions ?? []).includes(permission)
+  }
+
   function rateLimit(c: Context<AppEnv>, purpose: string, max: number, seconds: number) {
     return rateLimiter.reserve([{ key: JSON.stringify([purpose, c.get('clientIp')]), max, seconds }])
   }
@@ -259,15 +337,17 @@ export function createApp(db: Database, config: AppConfig) {
       if (typeof session.id !== 'string' || !Number.isInteger(session.version)) return null
       const user = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE id = ?`, [session.id])
       if (!user || user.sessionVersion !== session.version) return null
-      return asUser(user, settings)
+      return await buildUser(user, settings)
     } catch { return null }
   }
 
-  async function requireAdmin(c: Context<AppEnv>, next: () => Promise<void>) {
-    const user = c.get('user')
-    if (!user) throw new ApiError('请先登录管理员账户', 401)
-    if (user.role !== 'admin') throw new ApiError('需要管理员权限', 403)
-    await next()
+  function requirePermission(permission: PermissionKey) {
+    return async (c: Context<AppEnv>, next: () => Promise<void>) => {
+      const user = c.get('user')
+      if (!user) throw new ApiError('请先登录账户', 401)
+      if (!hasPermission(user, permission)) throw new ApiError('当前账户没有执行此操作的权限', 403)
+      await next()
+    }
   }
 
   async function requireUser(c: Context<AppEnv>, next: () => Promise<void>) {
@@ -278,14 +358,14 @@ export function createApp(db: Database, config: AppConfig) {
   async function requireBookmarkCreator(c: Context<AppEnv>, next: () => Promise<void>) {
     const user = c.get('user')
     if (!user) throw new ApiError('请先登录账户', 401)
-    if (!user.canAddBookmarks) throw new ApiError('当前账户没有添加书签的权限', 403)
+    if (!user.canAddBookmarks && !hasPermission(user, 'add_bookmarks')) throw new ApiError('当前账户没有添加书签的权限', 403)
     await next()
   }
 
   async function requireBookmarkEditor(c: Context<AppEnv>, next: () => Promise<void>) {
     const user = c.get('user')
     if (!user) throw new ApiError('请先登录账户', 401)
-    if (user.role !== 'admin' && !user.canPinBookmarks) throw new ApiError('当前账户没有修改书签的权限', 403)
+    if (!user.canPinBookmarks && !hasPermission(user, 'pin_bookmarks') && !hasPermission(user, 'edit_bookmarks')) throw new ApiError('当前账户没有修改书签的权限', 403)
     await next()
   }
 
@@ -383,7 +463,7 @@ export function createApp(db: Database, config: AppConfig) {
     const tags = await db.all<Tag & { count: number }>(`SELECT tags.id,tags.name,COUNT(bookmark_tags.bookmark_id) AS count FROM tags
       LEFT JOIN bookmark_tags ON tags.id = bookmark_tags.tag_id GROUP BY tags.id
       HAVING ? = 1 OR COUNT(bookmark_tags.bookmark_id) > 0 OR tags.id IN (SELECT value FROM json_each(?))
-      ORDER BY count DESC,tags.normalized_name,tags.id`, [user.role === 'admin' ? 1 : 0, JSON.stringify(blockedTagIds)])
+      ORDER BY count DESC,tags.normalized_name,tags.id`, [hasPermission(user, 'manage_tags') ? 1 : 0, JSON.stringify(blockedTagIds)])
     return { blockedTagIds, tags }
   }
 
@@ -435,7 +515,7 @@ export function createApp(db: Database, config: AppConfig) {
     const blocked = new Set(blockedTagIds)
     const bookmarks = (await withTags(records, 'bookmark')).filter(bookmark => !bookmark.tags.some(tag => blocked.has(tag.id))).map(asBookmark)
     const visibleIds = new Set(bookmarks.map(bookmark => bookmark.id))
-    const tags = await listTags(user?.role === 'admin' && !blocked.size, blocked.size ? bookmarks.map(bookmark => bookmark.id) : undefined)
+    const tags = await listTags(!!user && hasPermission(user, 'manage_tags') && !blocked.size, blocked.size ? bookmarks.map(bookmark => bookmark.id) : undefined)
     return c.json({
       categories,
       bookmarks,
@@ -496,7 +576,7 @@ export function createApp(db: Database, config: AppConfig) {
       } else {
         const stored = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE username_key = ?`, [usernameKey(username)])
         if (!await verifyPassword(body.password, stored?.passwordHash) || !stored) throw new ApiError('用户名或密码不正确', 401)
-        user = asUser(stored, c.get('settings'))
+        user = await buildUser(stored, c.get('settings'))
         version = stored.sessionVersion
       }
     } catch (error) {
@@ -584,23 +664,23 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ ok: true })
   })
 
-  app.get('/api/settings', requireAdmin, c => c.json(c.get('settings')))
+  app.get('/api/settings', requirePermission('manage_settings'), c => c.json(c.get('settings')))
 
   const webdavService = () => {
     if (!config.webdav) throw new ApiError('WebDAV 备份服务尚未启用，请更新并重启服务。', 503)
     return config.webdav
   }
-  app.get('/api/settings/webdav', requireAdmin, async c => c.json(await webdavService().getSettings()))
-  app.put('/api/settings/webdav', requireAdmin, async c => {
+  app.get('/api/settings/webdav', requirePermission('manage_settings'), async c => c.json(await webdavService().getSettings()))
+  app.put('/api/settings/webdav', requirePermission('manage_settings'), async c => {
     rateLimit(c, 'webdav:save', 30, 60)
     return c.json(await webdavService().saveSettings(await readBody(c)))
   })
-  app.post('/api/settings/webdav/test', requireAdmin, async c => {
+  app.post('/api/settings/webdav/test', requirePermission('manage_settings'), async c => {
     rateLimit(c, 'webdav:test', 5, 60)
     await webdavService().testConnection(await readBody(c))
     return c.json({ ok: true })
   })
-  app.post('/api/settings/webdav/backup', requireAdmin, async c => {
+  app.post('/api/settings/webdav/backup', requirePermission('manage_settings'), async c => {
     rateLimit(c, 'webdav:backup', 3, 60)
     return c.json(await webdavService().backup())
   })
@@ -609,22 +689,22 @@ export function createApp(db: Database, config: AppConfig) {
     if (!config.s3) throw new ApiError('S3 备份服务尚未启用，请更新并重启服务。', 503)
     return config.s3
   }
-  app.get('/api/settings/s3', requireAdmin, async c => c.json(await s3Service().getSettings()))
-  app.put('/api/settings/s3', requireAdmin, async c => {
+  app.get('/api/settings/s3', requirePermission('manage_settings'), async c => c.json(await s3Service().getSettings()))
+  app.put('/api/settings/s3', requirePermission('manage_settings'), async c => {
     rateLimit(c, 's3:save', 30, 60)
     return c.json(await s3Service().saveSettings(await readBody(c)))
   })
-  app.post('/api/settings/s3/test', requireAdmin, async c => {
+  app.post('/api/settings/s3/test', requirePermission('manage_settings'), async c => {
     rateLimit(c, 's3:test', 5, 60)
     await s3Service().testConnection(await readBody(c))
     return c.json({ ok: true })
   })
-  app.post('/api/settings/s3/backup', requireAdmin, async c => {
+  app.post('/api/settings/s3/backup', requirePermission('manage_settings'), async c => {
     rateLimit(c, 's3:backup', 3, 60)
     return c.json(await s3Service().backup())
   })
 
-  app.patch('/api/settings', requireAdmin, async c => {
+  app.patch('/api/settings', requirePermission('manage_settings'), async c => {
     const body = await readBody(c)
     const keys: Record<keyof SiteSettings, string> = {
       siteMode: 'site_mode', allowUserAddBookmarks: 'allow_user_add_bookmarks', allowUserPinBookmarks: 'allow_user_pin_bookmarks',
@@ -644,17 +724,17 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json(await getSettings())
   })
 
-  app.get('/api/users', requireAdmin, async c => {
+  app.get('/api/users', requirePermission('manage_users'), async c => {
     const query = usernameKey(stringField(c.req.query('q'), '搜索关键词', 100, false))
     const role = c.req.query('role') === undefined ? undefined : roleField(c.req.query('role'))
     const users = await db.all<StoredUser>(`SELECT ${userFields} FROM users ORDER BY created_at, username_key, id`)
-    return c.json({ users: [owner, ...users.map(user => asUser(user, c.get('settings')))]
+    return c.json({ users: [owner, ...(await Promise.all(users.map(user => buildUser(user, c.get('settings')))))]
       .filter(user => (!role || user.role === role) && usernameKey(user.username).includes(query)) })
   })
 
-  app.post('/api/users', requireAdmin, async c => {
+  app.post('/api/users', requirePermission('manage_users'), async c => {
     const body = await readBody(c)
-    if (Object.keys(body).some(key => !['username', 'password', 'role'].includes(key))) throw new ApiError('用户字段格式不正确')
+    if (Object.keys(body).some(key => !['username', 'password', 'groupIds', 'role'].includes(key))) throw new ApiError('用户字段格式不正确')
     const username = stringField(body.username, '用户名', 40).normalize('NFKC')
     if (username.length > 40 || !/^[\p{L}\p{N}_.-]+$/u.test(username)) throw new ApiError('用户名仅支持字母、数字、中文、下划线、点和短横线，最多 40 个字符')
     const key = usernameKey(username)
@@ -662,38 +742,54 @@ export function createApp(db: Database, config: AppConfig) {
       throw new ApiError('这个用户名已经存在', 409)
     }
     const password = passwordField(body.password)
-    const role = body.role === undefined ? 'user' : roleField(body.role)
+    // `role` is accepted for older clients. New clients always send groupIds.
+    if (body.role !== undefined) roleField(body.role)
+    const groupIds = body.groupIds === undefined
+      ? body.role === 'admin' ? ['group-admin'] : await defaultGroupIds()
+      : groupIdsField(body.groupIds)
+    await validateGroupIds(groupIds)
     const id = crypto.randomUUID()
     const passwordHash = await hashPassword(password)
-    await db.run('INSERT INTO users (id,username,username_key,password_hash,role,can_add_bookmarks) VALUES (?,?,?,?,?,?)', [id, username, key, passwordHash, role, role === 'admin' ? 1 : 0])
-    return c.json({ user: asUser({ id, username, role }, c.get('settings')) }, 201)
+    await db.batch([
+      { sql: 'INSERT INTO users (id,username,username_key,password_hash,role,can_add_bookmarks) VALUES (?,?,?,?,?,?)', params: [id, username, key, passwordHash, 'user', 0] },
+      ...groupIds.map(groupId => ({ sql: 'INSERT INTO user_group_members (user_id,group_id) VALUES (?,?)', params: [id, groupId] })),
+    ])
+    return c.json({ user: await buildUser({ id, username, role: groupIds.includes('group-admin') ? 'admin' : 'user' }, c.get('settings')) }, 201)
   })
 
-  app.patch('/api/users/:id', requireAdmin, async c => {
+  app.patch('/api/users/:id', requirePermission('manage_users'), async c => {
     const id = c.req.param('id')!
     if (id === owner.id) throw new ApiError('内置管理员由服务器配置管理，不能在此修改', 403)
     const existing = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE id = ?`, [id])
     if (!existing) throw new ApiError('这个用户不存在', 404)
     const body = await readBody(c)
-    if (!Object.keys(body).length || Object.keys(body).some(key => !['role', 'password'].includes(key))) throw new ApiError('没有可更新的用户字段')
+    if (!Object.keys(body).length || Object.keys(body).some(key => !['role', 'groupIds', 'password'].includes(key))) throw new ApiError('没有可更新的用户字段')
     const updates: string[] = []
     const values: unknown[] = []
-    if ('role' in body) {
+    if (body.role !== undefined) {
       const role = roleField(body.role)
       updates.push('role = ?', 'can_add_bookmarks = ?')
       values.push(role, role === 'admin' ? 1 : 0)
     }
+    const groupIds = body.groupIds === undefined
+      ? body.role === undefined ? undefined : body.role === 'admin' ? ['group-admin'] : await defaultGroupIds()
+      : groupIdsField(body.groupIds)
+    if (groupIds) await validateGroupIds(groupIds)
     if ('password' in body) {
       updates.push('password_hash = ?', 'session_version = session_version + 1')
       values.push(await hashPassword(passwordField(body.password)))
     }
-    // Update only submitted fields: a concurrent password reset must never undo a role change.
-    const updated = await db.get<StoredUser>(`UPDATE users SET ${updates.join(', ')} WHERE id = ? RETURNING ${userFields}`, [...values, id])
+    if (updates.length) await db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, [...values, id])
+    if (groupIds) await db.batch([
+      { sql: 'DELETE FROM user_group_members WHERE user_id = ?', params: [id] },
+      ...groupIds.map(groupId => ({ sql: 'INSERT INTO user_group_members (user_id,group_id) VALUES (?,?)', params: [id, groupId] })),
+    ])
+    const updated = await db.get<StoredUser>(`SELECT ${userFields} FROM users WHERE id = ?`, [id])
     if (!updated) throw new ApiError('这个用户不存在', 404)
-    return c.json({ user: asUser(updated, c.get('settings')) })
+    return c.json({ user: await buildUser(updated, c.get('settings')) })
   })
 
-  app.delete('/api/users/:id', requireAdmin, async c => {
+  app.delete('/api/users/:id', requirePermission('manage_users'), async c => {
     const id = c.req.param('id')!
     if (id === owner.id) throw new ApiError('不能删除内置管理员', 403)
     if (id === c.get('user')!.id) throw new ApiError('不能删除当前登录的账户', 403)
@@ -702,11 +798,68 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ ok: true })
   })
 
-  app.get('/api/operations', requireAdmin, async c => c.json(await listOperations(db, {
+  app.get('/api/user-groups', requirePermission('manage_groups'), async c => c.json({ groups: await listGroups() }))
+
+  app.post('/api/user-groups', requirePermission('manage_groups'), async c => {
+    const body = await readBody(c)
+    if (Object.keys(body).some(key => !['name', 'description', 'permissions', 'isDefault'].includes(key))) throw new ApiError('用户组字段格式不正确')
+    const name = stringField(body.name, '用户组名称', 40)
+    const description = stringField(body.description, '用户组说明', 160, false)
+    const permissions = permissionsField(body.permissions ?? [])
+    if (body.isDefault !== undefined && typeof body.isDefault !== 'boolean') throw new ApiError('默认用户组格式不正确')
+    const id = crypto.randomUUID()
+    try {
+      await db.run('INSERT INTO user_groups (id,name,description,permissions,is_default) VALUES (?,?,?,?,?)', [id, name, description, JSON.stringify(permissions), body.isDefault ? 1 : 0])
+    } catch (error) {
+      if (String(error).includes('UNIQUE constraint failed')) throw new ApiError('这个用户组名称已经存在', 409)
+      throw error
+    }
+    const group = (await listGroups()).find(item => item.id === id)!
+    return c.json({ group }, 201)
+  })
+
+  app.patch('/api/user-groups/:id', requirePermission('manage_groups'), async c => {
+    const id = c.req.param('id')!
+    const existing = await db.get<{ id: string; isSystem: number }>('SELECT id,is_system AS isSystem FROM user_groups WHERE id = ?', [id])
+    if (!existing) throw new ApiError('这个用户组不存在', 404)
+    if (existing.isSystem) throw new ApiError('系统用户组不可修改', 403)
+    const body = await readBody(c)
+    if (!Object.keys(body).length || Object.keys(body).some(key => !['name', 'description', 'permissions', 'isDefault'].includes(key))) throw new ApiError('没有可更新的用户组字段')
+    const fields: string[] = []
+    const values: unknown[] = []
+    if ('name' in body) { fields.push('name = ?'); values.push(stringField(body.name, '用户组名称', 40)) }
+    if ('description' in body) { fields.push('description = ?'); values.push(stringField(body.description, '用户组说明', 160, false)) }
+    if ('permissions' in body) { fields.push('permissions = ?'); values.push(JSON.stringify(permissionsField(body.permissions))) }
+    if ('isDefault' in body) {
+      if (typeof body.isDefault !== 'boolean') throw new ApiError('默认用户组格式不正确')
+      if (!body.isDefault) {
+        const defaults = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM user_groups WHERE is_default = 1')
+        if ((defaults?.count ?? 0) <= 1) throw new ApiError('至少需要保留一个默认用户组', 409)
+      }
+      fields.push('is_default = ?'); values.push(body.isDefault ? 1 : 0)
+    }
+    try { await db.run(`UPDATE user_groups SET ${fields.join(', ')} WHERE id = ?`, [...values, id]) }
+    catch (error) { if (String(error).includes('UNIQUE constraint failed')) throw new ApiError('这个用户组名称已经存在', 409); throw error }
+    return c.json({ group: (await listGroups()).find(item => item.id === id)! })
+  })
+
+  app.delete('/api/user-groups/:id', requirePermission('manage_groups'), async c => {
+    const id = c.req.param('id')!
+    const group = await db.get<{ isSystem: number; isDefault: number }>('SELECT is_system AS isSystem,is_default AS isDefault FROM user_groups WHERE id = ?', [id])
+    if (!group) throw new ApiError('这个用户组不存在', 404)
+    if (group.isSystem) throw new ApiError('系统用户组不可删除', 403)
+    if (group.isDefault) throw new ApiError('请先设定其他默认用户组，再删除此用户组', 409)
+    const members = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM user_group_members WHERE group_id = ?', [id])
+    if ((members?.count ?? 0) > 0) throw new ApiError('该用户组仍有成员，请先为成员调整用户组', 409)
+    await db.run('DELETE FROM user_groups WHERE id = ?', [id])
+    return c.json({ ok: true })
+  })
+
+  app.get('/api/operations', requirePermission('view_operations'), async c => c.json(await listOperations(db, {
     q: c.req.query('q'), action: c.req.query('action'), actor: c.req.query('actor'), page: c.req.query('page'), pageSize: c.req.query('pageSize'),
   })))
-  app.get('/api/operations/:id', requireAdmin, async c => c.json(await operationDetail(db, c.req.param('id')!)))
-  app.post('/api/operations/:id/revert', requireAdmin, async c => c.json(await revertOperation(db, c.req.param('id')!, c.get('user')!)))
+  app.get('/api/operations/:id', requirePermission('view_operations'), async c => c.json(await operationDetail(db, c.req.param('id')!)))
+  app.post('/api/operations/:id/revert', requirePermission('edit_bookmarks'), async c => c.json(await revertOperation(db, c.req.param('id')!, c.get('user')!)))
 
   app.post('/api/bookmarks/:id/click', async c => {
     rateLimit(c, 'click', 180, 60)
@@ -717,7 +870,7 @@ export function createApp(db: Database, config: AppConfig) {
 
   app.post('/api/bookmarks', requireBookmarkCreator, async c => {
     const body = await readBody(c)
-    if (Object.hasOwn(body, 'iconUrl') && c.get('user')!.role !== 'admin') throw new ApiError('只有管理员可以设置自定义图标', 403)
+    if (Object.hasOwn(body, 'iconUrl') && !hasPermission(c.get('user')!, 'edit_bookmarks')) throw new ApiError('当前账户没有设置自定义图标的权限', 403)
     const { title, url, description, categoryId, categoryIds } = await validateBookmark(body)
     const iconUrl = bookmarkIconUrl(body.iconUrl)
     const tags = tagInputs(body.tags)
@@ -731,7 +884,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ bookmark: await findBookmark(id) }, 201)
   })
 
-  app.post('/api/bookmarks/batch-tags', requireAdmin, async c => {
+  app.post('/api/bookmarks/batch-tags', requirePermission('manage_tags'), async c => {
     const body = await readBody(c)
     if (!Array.isArray(body.bookmarkIds) || !body.bookmarkIds.length || body.bookmarkIds.length > 200
       || body.bookmarkIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 100)) {
@@ -758,12 +911,16 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ bookmarks: updated.map(asBookmark), tags: await listTags(true) })
   })
 
-  app.patch('/api/bookmarks/:id', requireBookmarkEditor, async c => {
+  app.patch('/api/bookmarks/:id', requireUser, async c => {
     const id = c.req.param('id')!
     const body = await readBody(c)
     const keys = Object.keys(body)
     const pinOnly = Object.hasOwn(body, 'pinned') && keys.every(key => ['pinned', 'categoryId'].includes(key))
-    if (c.get('user')!.role !== 'admin' && !pinOnly) throw new ApiError('用户仅能修改书签的置顶状态', 403)
+    const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags', 'iconUrl']
+    if (!keys.length) throw new ApiError('没有可更新的书签字段')
+    if (pinOnly && !c.get('user')!.canPinBookmarks && !hasPermission(c.get('user')!, 'pin_bookmarks')) throw new ApiError('当前账户没有置顶书签的权限', 403)
+    if (!pinOnly && !hasPermission(c.get('user')!, 'edit_bookmarks')) throw new ApiError('当前账户没有编辑书签的权限', 403)
+    if (keys.some(key => !accepted.includes(key))) throw new ApiError('没有可更新的书签字段')
     const existing = await findBookmark(id)
     if (pinOnly) {
       if (typeof body.pinned !== 'boolean') throw new ApiError('置顶状态格式不正确')
@@ -776,8 +933,6 @@ export function createApp(db: Database, config: AppConfig) {
       } else await auditedMutation(db, 'pin', c.get('user')!, { bookmarkIds: [id] }, [{ sql: 'UPDATE bookmarks SET pinned = ? WHERE id = ?', params: [body.pinned ? 1 : 0, id] }])
       return c.json({ bookmark: await findBookmark(id) })
     }
-    const accepted = ['title', 'url', 'description', 'categoryId', 'categoryIds', 'pinned', 'tags', 'iconUrl']
-    if (!keys.length || keys.some(key => !accepted.includes(key))) throw new ApiError('没有可更新的书签字段')
     if ('pinned' in body && typeof body.pinned !== 'boolean') throw new ApiError('置顶状态格式不正确')
     const value = await validateBookmark({ ...existing, ...body, ...('categoryId' in body && !('categoryIds' in body) ? { categoryIds: [body.categoryId] } : {}) })
     const tags = 'tags' in body ? tagInputs(body.tags) : undefined
@@ -802,13 +957,13 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ bookmark: await findBookmark(id) })
   })
 
-  app.delete('/api/bookmarks/:id', requireAdmin, async c => {
+  app.delete('/api/bookmarks/:id', requirePermission('delete_bookmarks'), async c => {
     await findBookmark(c.req.param('id')!)
     await auditedMutation(db, 'delete', c.get('user')!, { bookmarkIds: [c.req.param('id')!] }, [{ sql: 'DELETE FROM bookmarks WHERE id = ?', params: [c.req.param('id')] }])
     return c.json({ ok: true })
   })
 
-  app.post('/api/tags', requireAdmin, async c => {
+  app.post('/api/tags', requirePermission('manage_tags'), async c => {
     const tag = tagName((await readBody(c)).name)
     if (await db.get('SELECT id FROM tags WHERE normalized_name = ?', [tag.normalizedName])) throw new ApiError('这个标签已经存在', 409)
     const id = crypto.randomUUID()
@@ -816,7 +971,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ tag: { id, name: tag.name } }, 201)
   })
 
-  app.patch('/api/tags/:id', requireAdmin, async c => {
+  app.patch('/api/tags/:id', requirePermission('manage_tags'), async c => {
     const id = c.req.param('id')!
     if (!await db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new ApiError('这个标签不存在', 404)
     const tag = tagName((await readBody(c)).name)
@@ -825,14 +980,14 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ tag: { id, name: tag.name } })
   })
 
-  app.delete('/api/tags/:id', requireAdmin, async c => {
+  app.delete('/api/tags/:id', requirePermission('manage_tags'), async c => {
     const id = c.req.param('id')!
     if (!await db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new ApiError('这个标签不存在', 404)
     await auditedMutation(db, 'tag_delete', c.get('user')!, { tagIds: [id] }, [{ sql: 'DELETE FROM tags WHERE id = ?', params: [id] }])
     return c.json({ ok: true })
   })
 
-  app.post('/api/categories', requireAdmin, async c => {
+  app.post('/api/categories', requirePermission('manage_categories'), async c => {
     const body = await readBody(c)
     const name = stringField(body.name, '分类名称', 24)
     const icon = body.icon === undefined ? 'Folder' : stringField(body.icon, '分类图标', 40)
@@ -847,7 +1002,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ category: await db.get<Category>(`SELECT ${categoryFields} FROM categories WHERE id = ?`, [id]) }, 201)
   })
 
-  app.put('/api/categories/order', requireAdmin, async c => {
+  app.put('/api/categories/order', requirePermission('manage_categories'), async c => {
     const body = await readBody(c)
     const ids = body.categoryIds
     if (Object.keys(body).some(key => key !== 'categoryIds') || !Array.isArray(ids)
@@ -876,7 +1031,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ categories: await db.all<Category>(`SELECT ${categoryFields} FROM categories ORDER BY sort_order,name`) })
   })
 
-  app.patch('/api/categories/:id', requireAdmin, async c => {
+  app.patch('/api/categories/:id', requirePermission('manage_categories'), async c => {
     const id = c.req.param('id')!
     if (!await db.get('SELECT id FROM categories WHERE id = ?', [id])) throw new ApiError('这个文件夹不存在', 404)
     const body = await readBody(c)
@@ -907,9 +1062,9 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ category })
   })
 
-  app.get('/api/categories/:id/deletion-preview', requireAdmin, async c => c.json(await categoryDeletionPreview(c.req.param('id')!)))
+  app.get('/api/categories/:id/deletion-preview', requirePermission('manage_categories'), async c => c.json(await categoryDeletionPreview(c.req.param('id')!)))
 
-  app.delete('/api/categories/:id', requireAdmin, async c => {
+  app.delete('/api/categories/:id', requirePermission('manage_categories'), async c => {
     const id = c.req.param('id')!
     const body = c.req.raw.body ? await readBody(c) : {}
     if (Object.keys(body).some(key => key !== 'targetCategoryId')) throw new ApiError('删除文件夹的参数不正确')
@@ -948,7 +1103,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ ok: true })
   })
 
-  app.get('/api/submissions', requireAdmin, async c => {
+  app.get('/api/submissions', requirePermission('review_submissions'), async c => {
     const submissions = await db.all<Submission>(`SELECT ${submissionFields} FROM submissions ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC`)
     return c.json({ submissions: await withTags(submissions, 'submission') })
   })
@@ -975,7 +1130,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ submission: (await withTags([submission!], 'submission'))[0] }, 201)
   })
 
-  app.post('/api/submissions/:id/approve', requireAdmin, async c => {
+  app.post('/api/submissions/:id/approve', requirePermission('review_submissions'), async c => {
     const id = c.req.param('id')!
     const submission = await db.get<Submission>(`SELECT ${submissionFields} FROM submissions WHERE id = ?`, [id])
     if (!submission) throw new ApiError('这条推荐不存在', 404)
@@ -1024,7 +1179,7 @@ export function createApp(db: Database, config: AppConfig) {
     return c.json({ bookmark: await findBookmark(bookmarkId) })
   })
 
-  app.post('/api/submissions/:id/reject', requireAdmin, async c => {
+  app.post('/api/submissions/:id/reject', requirePermission('review_submissions'), async c => {
     const result = await db.get<{ id: string }>("UPDATE submissions SET status = 'rejected' WHERE id = ? AND status = 'pending' RETURNING id", [c.req.param('id')])
     if (!result) throw new ApiError('这条推荐不存在或已经处理过了', 409)
     return c.json({ ok: true })

@@ -38,6 +38,21 @@ export type User = {
   canAddBookmarks: boolean;
   canPinBookmarks: boolean;
   isOwner: boolean;
+  groups?: UserGroup[];
+  permissions?: PermissionKey[];
+};
+export type PermissionKey =
+  | "manage_users" | "manage_groups" | "manage_settings"
+  | "add_bookmarks" | "edit_bookmarks" | "delete_bookmarks" | "pin_bookmarks"
+  | "manage_tags" | "manage_categories" | "review_submissions" | "view_operations";
+export type UserGroup = {
+  id: string;
+  name: string;
+  description: string;
+  permissions: PermissionKey[];
+  isSystem: boolean;
+  isDefault: boolean;
+  memberCount?: number;
 };
 export type SiteSettings = {
   siteMode: "public" | "private";

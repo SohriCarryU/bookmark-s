@@ -179,12 +179,16 @@ test.describe('persisted accounts and settings', () => {
     await expect(dialog).toHaveCount(0);
   }
 
-  async function saveRole(page: Page, username: string) {
+  async function saveUserGroups(page: Page) {
     const responsePromise = page.waitForResponse(response =>
       response.url().includes('/api/users/') && response.request().method() === 'PATCH');
-    await page.getByRole('button', { name: `保存 ${username} 的角色`, exact: true }).click();
+    await page.getByRole('button', { name: '保存用户组', exact: true }).click();
     expect((await responsePromise).ok()).toBeTruthy();
-    await expect(page.getByRole('button', { name: `保存 ${username} 的角色`, exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '保存用户组', exact: true })).toHaveCount(0);
+  }
+
+  function accountCard(page: Page, username: string) {
+    return page.locator('article.users-account').filter({ has: page.getByText(username, { exact: true }) });
   }
 
   async function toggleSetting(page: Page, name: string, enabled: boolean) {
@@ -282,7 +286,7 @@ test.describe('persisted accounts and settings', () => {
     }
   });
 
-  test('dedicated user management searches and filters accounts, edits roles, resets passwords and deletes accounts', async ({ page, context, browser, baseURL }) => {
+  test('dedicated user management searches and filters accounts, updates user groups, resets passwords and deletes accounts', async ({ page, context, browser, baseURL }) => {
     const username = `e2e-manage-${Date.now()}`;
     const resetPassword = 'bookmark-s-reset-e2e-password';
     await context.addCookies((await admin.storageState()).cookies);
@@ -293,28 +297,28 @@ test.describe('persisted accounts and settings', () => {
     const create = page.getByRole('region', { name: '创建用户', exact: true });
     await create.getByLabel('用户名', { exact: true }).fill(username);
     await create.getByLabel('初始密码', { exact: true }).fill(password);
-    await expect(create.getByRole('combobox', { name: '角色', exact: true })).toHaveValue('user');
-    await expect(create.getByRole('checkbox')).toHaveCount(0);
+    await expect(create.getByRole('checkbox', { name: /^普通用户/ })).toBeChecked();
     await create.getByRole('button', { name: '创建账号', exact: true }).click();
-    const account = page.getByRole('article', { name: `${username} 的账号`, exact: true });
+    const account = accountCard(page, username);
     await expect(account).toBeVisible();
     const search = page.getByLabel('搜索用户名', { exact: true });
-    const roleFilter = page.getByRole('combobox', { name: '筛选角色', exact: true });
+    const groupFilter = page.getByRole('combobox', { name: '筛选用户组', exact: true });
     await search.fill(username);
-    await roleFilter.selectOption('user');
-    await expect(page.getByRole('article')).toHaveCount(1);
-    await roleFilter.selectOption('admin');
+    await groupFilter.selectOption('group-user');
+    await expect(page.locator('article.users-account')).toHaveCount(1);
+    await groupFilter.selectOption('group-admin');
     await expect(account).toHaveCount(0);
-    await roleFilter.selectOption('all');
+    await groupFilter.selectOption('all');
     await expect(account).toBeVisible();
-    await account.getByRole('combobox', { name: '角色', exact: true }).selectOption('admin');
-    await saveRole(page, username);
-    await roleFilter.selectOption('admin');
+    await account.getByRole('button', { name: '用户组', exact: true }).click();
+    await account.getByRole('checkbox', { name: /^管理员/ }).check();
+    await saveUserGroups(page);
+    await groupFilter.selectOption('group-admin');
     await expect(account).toBeVisible();
     await search.fill('');
-    const owner = page.getByRole('article', { name: 'admin 的账号', exact: true });
-    await expect(owner.getByRole('combobox', { name: '角色', exact: true })).toBeDisabled();
-    await expect(owner.getByRole('button', { name: '删除 admin', exact: true })).toHaveCount(0);
+    const owner = accountCard(page, 'admin');
+    await expect(owner.getByRole('button', { name: '用户组', exact: true })).toHaveCount(0);
+    await expect(owner.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
     await page.setViewportSize({ width: 320, height: 844 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -325,11 +329,11 @@ test.describe('persisted accounts and settings', () => {
       const member = await memberContext.newPage();
       await member.goto('/');
       await member.getByRole('button', { name: '用户管理', exact: true }).click();
-      const ownAccount = member.getByRole('article', { name: `${username} 的账号`, exact: true });
-      await expect(ownAccount.getByRole('button', { name: `删除 ${username}`, exact: true })).toHaveCount(0);
-      await expect(member.getByRole('article', { name: 'admin 的账号', exact: true }).getByRole('button', { name: '删除 admin', exact: true })).toHaveCount(0);
+      const ownAccount = accountCard(member, username);
+      await expect(ownAccount.getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
+      await expect(accountCard(member, 'admin').getByRole('button', { name: '删除', exact: true })).toHaveCount(0);
 
-      await account.getByRole('button', { name: `重置 ${username} 的密码`, exact: true }).click();
+      await account.getByRole('button', { name: '重置密码', exact: true }).click();
       await account.getByLabel('新密码', { exact: true }).fill(resetPassword);
       const reset = page.waitForResponse(response => response.url().includes('/api/users/') && response.request().method() === 'PATCH');
       await account.getByRole('button', { name: '确认重置密码', exact: true }).click();
@@ -342,13 +346,14 @@ test.describe('persisted accounts and settings', () => {
       await login(member, username, resetPassword);
       await expect(member.getByRole('button', { name: '用户管理', exact: true })).toBeVisible();
 
-      await roleFilter.selectOption('all');
-      await account.getByRole('combobox', { name: '角色', exact: true }).selectOption('user');
-      await saveRole(page, username);
+      await groupFilter.selectOption('all');
+      await account.getByRole('button', { name: '用户组', exact: true }).click();
+      await account.getByRole('checkbox', { name: /^管理员/ }).uncheck();
+      await saveUserGroups(page);
       await member.evaluate(() => window.dispatchEvent(new Event('focus')));
       await expect(member.getByRole('button', { name: '用户管理', exact: true })).toHaveCount(0);
       await expect(member.getByRole('button', { name: '站点配置', exact: true })).toHaveCount(0);
-      await account.getByRole('button', { name: `删除 ${username}`, exact: true }).click();
+      await account.getByRole('button', { name: '删除', exact: true }).click();
       const removed = page.waitForResponse(response => response.url().includes('/api/users/') && response.request().method() === 'DELETE');
       await account.getByRole('button', { name: '确认删除账号', exact: true }).click();
       expect((await removed).ok()).toBeTruthy();

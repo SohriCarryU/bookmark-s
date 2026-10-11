@@ -74,12 +74,14 @@
 .users-account-list { min-width: 0; }
 .users-account { min-width: 0; padding: 20px 0; border-top: 1px solid #edf0e7; }
 .users-account:last-child { padding-bottom: 0; }
-.users-account-main { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(190px, .9fr) auto; align-items: center; gap: 18px; }
-.users-role-form { display: flex; align-items: flex-end; gap: 10px; min-width: 0; }
-.users-role-form > .form-field { flex: 1; }
-.users-role-form > button { flex-shrink: 0; white-space: nowrap; }
-.users-account-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.users-account-actions button { white-space: nowrap; }
+.users-account-main { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(244px, .9fr) auto; align-items: end; gap: 18px; }
+.users-account-main > .settings-user-identity { align-self: center; }
+.users-role-form { display: grid; grid-template-columns: minmax(130px, 1fr) 104px; align-items: end; gap: 10px; min-width: 0; }
+.users-role-form > .form-field { min-width: 0; }
+.users-role-form > button { width: 104px; white-space: nowrap; }
+.users-account-actions { align-self: end; display: grid; grid-template-columns: 104px 76px; align-items: center; justify-content: end; gap: 8px; }
+.users-account-actions button { width: 100%; white-space: nowrap; }
+.users-account-actions .settings-owner-note { grid-column: 1 / -1; justify-self: end; }
 .users-inline-panel { margin-top: 17px; padding: 17px; border: 1px solid #dfe7d6; border-radius: 9px; background: #f6f9f1; }
 .users-inline-panel h3 { font-size: 14px; font-weight: 600; line-height: 1.8; margin: 0 0 6px; overflow-wrap: anywhere; }
 .users-inline-panel p { color: var(--muted); font-size: 13px; line-height: 1.9; margin: 0 0 15px; }
@@ -92,8 +94,32 @@
 .users-empty > svg { margin-bottom: 12px; }
 .users-empty h3 { margin: 0 0 8px; font-size: 15px; font-weight: 500; }
 .users-empty p { font-size: 13px; line-height: 1.8; margin: 0 0 17px; color: var(--muted); }
+.user-groups-card .settings-card-heading { align-items: flex-start; }
+.user-groups-card .settings-card-heading > .primary-button { margin-left: auto; }
+.user-group-list { border-top: 1px solid #edf0e7; }
+.user-group-row { display: flex; justify-content: space-between; gap: 18px; padding: 16px 0; border-bottom: 1px solid #edf0e7; }
+.user-group-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.user-group-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.user-group-row p { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.user-group-row small { color: var(--muted); font-size: 12px; }
+.user-group-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.user-group-meta > div { display: flex; gap: 8px; }
+.group-editor { margin-top: 16px; padding: 16px; background: #f6f9f1; border: 1px solid #dfe7d6; border-radius: 9px; }
+.group-editor-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.group-permissions { border: 0; padding: 0; margin: 16px 0 12px; }
+.group-permissions legend, .user-group-fieldset legend { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
+.group-permission-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px 14px; }
+.group-permission-option, .group-default-option { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+.group-default-option { margin-top: 12px; }
+.users-account-groups { grid-template-columns: minmax(180px, 1fr) minmax(150px, 1fr) auto; align-items: center; }
+.user-group-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.user-group-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.user-group-checks label { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border: 1px solid #e1e8db; border-radius: 7px; background: #fff; font-size: 13px; }
+.user-group-checks span { display: grid; gap: 2px; }
+.user-group-checks small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.user-group-fieldset { border: 0; padding: 0; margin: 16px 0 0; }
 
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .users-account-main { grid-template-columns: minmax(130px, 1fr) minmax(190px, 1fr); gap: 15px; }
   .users-account-actions { grid-column: 1 / -1; }
 }
@@ -136,6 +162,11 @@
   .settings-create-fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .settings-page .form-field input, .settings-page .form-field select { font-size: 16px; padding-block: 8px; }
   .settings-form-footer .primary-button { width: 100%; }
+  .group-editor-fields, .user-group-checks { grid-template-columns: minmax(0, 1fr); }
+  .group-permission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .user-group-row { flex-direction: column; gap: 12px; }
+  .user-group-meta { align-items: flex-start; }
+  .user-groups-card .settings-card-heading > .primary-button { margin: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .settings-switch, .settings-switch-thumb, .settings-section-toggle, .settings-section-chevron { transition: none; }

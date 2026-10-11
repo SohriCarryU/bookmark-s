@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { ArrowDown, ArrowUp, LoaderCircle, RefreshCw, Save } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, LoaderCircle, RefreshCw, Save } from "lucide-react";
 import { api, messageOf } from "./api";
 import Modal from "./Modal";
 import { CategoryIcon } from "./folderIcons";
@@ -16,6 +16,8 @@ export default function CategoryOrderModal({ categories, onClose, onSaved }: {
   const [busy, setBusy] = useState<"save" | "reload" | null>(null);
   const [error, setError] = useState("");
   const [announcement, setAnnouncement] = useState("");
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const working = useRef(false);
   const changed = ordered.length !== savedIds.length || ordered.some((category, index) => category.id !== savedIds[index]);
 
@@ -28,6 +30,18 @@ export default function CategoryOrderModal({ categories, onClose, onSaved }: {
     [next[index], next[target]] = [next[target], next[index]];
     setOrdered(next);
     setAnnouncement(`${ordered[index].name} 已移至第 ${target + 1} 位，共 ${ordered.length} 个文件夹。`);
+  }
+
+  function moveBefore(sourceId: string, targetId: string) {
+    if (working.current || sourceId === targetId) return;
+    const sourceIndex = ordered.findIndex((category) => category.id === sourceId);
+    const targetIndex = ordered.findIndex((category) => category.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const next = [...ordered];
+    const [source] = next.splice(sourceIndex, 1);
+    next.splice(next.findIndex((category) => category.id === targetId), 0, source);
+    setOrdered(next);
+    setAnnouncement(`${source.name} 已移至第 ${targetIndex + 1} 位，共 ${next.length} 个文件夹。`);
   }
 
   async function reload() {
@@ -71,14 +85,45 @@ export default function CategoryOrderModal({ categories, onClose, onSaved }: {
   return (
     <Modal
       title="文件夹排序"
-      subtitle="用上下箭头调整顺序，保存后所有用户和访客都会看到新的排列。"
+      subtitle="拖动文件夹调整顺序，也可以使用上下箭头；保存后所有用户和访客都会看到新的排列。"
       onClose={() => !working.current && onClose()}
     >
       <form onSubmit={submit}>
         <div className="modal-body folder-order-body">
           <ol className="folder-order-list" aria-label="文件夹顺序">
             {ordered.map((category, index) => (
-              <li className="folder-order-row" key={category.id}>
+              <li
+                className={`folder-order-row${draggedId === category.id ? " dragging" : ""}${dragOverId === category.id ? " drag-over" : ""}`}
+                key={category.id}
+                draggable={!busy}
+                onDragStart={(event) => {
+                  if (busy) return;
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", category.id);
+                  setDraggedId(category.id);
+                  setDragOverId(null);
+                }}
+                onDragOver={(event) => {
+                  if (!draggedId || draggedId === category.id || busy) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setDragOverId(category.id);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const sourceId = event.dataTransfer.getData("text/plain") || draggedId;
+                  if (sourceId) moveBefore(sourceId, category.id);
+                  setDraggedId(null);
+                  setDragOverId(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedId(null);
+                  setDragOverId(null);
+                }}
+              >
+                <span className="folder-order-drag-handle" title="拖动调整顺序" aria-label={`拖动 ${category.name} 调整顺序`}>
+                  <GripVertical size={17} aria-hidden="true" />
+                </span>
                 <span className="folder-order-icon" style={{ color: category.color }} aria-hidden="true">
                   <CategoryIcon name={category.icon} size={19} />
                 </span>

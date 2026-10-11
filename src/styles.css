@@ -285,7 +285,7 @@ button svg, a svg { flex-shrink: 0; }
 .brand > span:last-child { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .brand strong { display: block; font-size: 22px; line-height: 1.15; letter-spacing: -1px; font-weight: 650; white-space: nowrap; }
 .brand strong span { color: #77a160; }
-.brand small { display: block; margin-top: 4px; font-size: 10px; line-height: 1.4; font-weight: 400; color: var(--muted); letter-spacing: 1.25px; white-space: nowrap; }
+.brand small { display: block; margin-top: 4px; font-size: 13px; line-height: 1.4; font-weight: 500; color: var(--text-secondary); letter-spacing: .8px; white-space: nowrap; }
 .sidebar-navigation { margin-top: 19px; }
 .sidebar-divider { margin: 20px 12px 0; border-top: 1px solid #e4e9dd; }
 .sidebar-bottom { margin-top: auto; padding-top: 50px; }

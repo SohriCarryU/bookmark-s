@@ -24,6 +24,12 @@
 .folder-order-body { min-width: 0; }
 .folder-order-list { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
 .folder-order-row { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 11px 12px; border: 1px solid #e0e7d7; border-radius: 9px; background: #fff; }
+.folder-order-row { cursor: grab; transition: border-color .16s ease, background-color .16s ease, opacity .16s ease, box-shadow .16s ease; }
+.folder-order-row:active { cursor: grabbing; }
+.folder-order-row.dragging { opacity: .45; }
+.folder-order-row.drag-over { border-color: #88a978; background: #f3f8ee; box-shadow: 0 0 0 2px #dcebd4; }
+.folder-order-drag-handle { display: grid; place-items: center; flex: 0 0 20px; width: 20px; color: #9aa791; cursor: grab; }
+.folder-order-drag-handle:focus-visible { outline: 2px solid #63936a; outline-offset: 2px; border-radius: 4px; }
 .folder-order-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; background: #f4f7ef; }
 .folder-order-name { flex: 1; min-width: 0; color: var(--text-secondary); font-size: 14px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
 .folder-order-actions { display: flex; flex: 0 0 auto; gap: 4px; }
@@ -44,6 +50,7 @@
   .folder-migration-field select { font-size: 16px; }
   .folder-deletion-footer > button { flex: 1; }
   .folder-order-row { gap: 9px; padding: 10px; }
+  .folder-order-drag-handle { flex-basis: 18px; width: 18px; }
   .folder-order-icon { flex-basis: 26px; width: 26px; height: 28px; }
   .folder-order-footer > button { flex: 1; }
 }
