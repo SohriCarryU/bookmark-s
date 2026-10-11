@@ -68,8 +68,9 @@ async function restore(original: OriginalState) {
 
 async function publicCollection(admin: APIRequestContext, allowUserAddBookmarks = false) {
   expect((await admin.patch('/api/settings', { data: {
-    siteMode: 'public', cacheSiteIcons: true, allowUserAddBookmarks,
+    siteMode: 'public', cacheSiteIcons: true,
   } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: allowUserAddBookmarks ? ['add_bookmarks'] : [] } })).ok()).toBeTruthy();
 }
 
 async function controlledIcons(page: Page) {

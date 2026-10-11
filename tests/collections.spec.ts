@@ -30,7 +30,8 @@ test.afterEach(async () => {
   for (const user of users) {
     if (!originalUserIds.has(user.id)) expect((await admin.delete(`/api/users/${user.id}`)).ok()).toBeTruthy();
   }
-  expect((await admin.patch('/api/settings', { data: { allowUserAddBookmarks: false, allowUserPinBookmarks: false, siteMode: 'public' } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: [] } })).ok()).toBeTruthy();
 });
 test.afterAll(async () => { await admin.dispose(); });
 

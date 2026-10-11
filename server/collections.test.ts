@@ -77,7 +77,7 @@ test('pin-authorized users can change existing global or folder pins without cha
   t.after(() => db.close())
   const owner = await login()
   const member = await account(owner, 'member')
-  await request('/api/settings', 'PATCH', { allowUserPinBookmarks: true }, owner)
+  await request('/api/user-groups/group-user', 'PATCH', { permissions: ['pin_category_bookmarks', 'pin_all_bookmarks'] }, owner)
   const { bookmark } = await (await request('/api/bookmarks', 'POST', input, owner)).json()
   for (const body of [{ categoryId: 'explore', pinned: true }, { pinned: true }]) {
     assert.equal((await request(`/api/bookmarks/${bookmark.id}`, 'PATCH', body, member)).status, 200)
@@ -90,7 +90,7 @@ test('pin-authorized users can change existing global or folder pins without cha
   const actual = state.bookmarks.find((item: { id: string }) => item.id === bookmark.id)
   assert.deepEqual(actual.categoryIds, input.categoryIds)
   assert.deepEqual(actual.editedBy, [])
-  await request('/api/settings', 'PATCH', { allowUserPinBookmarks: false }, owner)
+  await request('/api/user-groups/group-user', 'PATCH', { permissions: [] }, owner)
   assert.equal((await request(`/api/bookmarks/${bookmark.id}`, 'PATCH', { categoryId: 'explore', pinned: false }, member)).status, 403)
 })
 

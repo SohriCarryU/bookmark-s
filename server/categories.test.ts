@@ -41,7 +41,7 @@ test('folder mutation and deletion previews are admin-only even for users with a
   const owner = await login()
   await call('/api/users', 'POST', { username: 'member', password: 'member-test-password' }, owner, 201)
   const member = await login('member', 'member-test-password')
-  await call('/api/settings', 'PATCH', { allowUserAddBookmarks: true, allowUserPinCategoryBookmarks: true, allowUserPinAllBookmarks: true }, owner)
+  await call('/api/user-groups/group-user', 'PATCH', { permissions: ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'] }, owner)
   for (const [path, method, body] of [
     ['/api/categories/development', 'PATCH', { name: 'Forbidden' }],
     ['/api/categories/development/deletion-preview', 'GET', undefined],

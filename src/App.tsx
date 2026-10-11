@@ -131,9 +131,9 @@ export default function App() {
   const permissions = new Set(data?.user?.permissions ?? []);
   const can = (permission: PermissionKey) => !!data?.user && (data.user.isOwner || permissions.has(permission));
   const isAdmin = can("manage_users");
-  const canAddBookmarks = can("add_bookmarks") || !!data?.allowUserAddBookmarks;
-  const canPinCategoryBookmarks = can("pin_category_bookmarks") || data?.user?.canPinCategoryBookmarks || !!data?.allowUserPinCategoryBookmarks || !!data?.allowUserPinBookmarks;
-  const canPinAllBookmarks = can("pin_all_bookmarks") || data?.user?.canPinAllBookmarks || !!data?.allowUserPinAllBookmarks || !!data?.allowUserPinBookmarks;
+  const canAddBookmarks = can("add_bookmarks");
+  const canPinCategoryBookmarks = can("pin_category_bookmarks") || !!data?.user?.canPinCategoryBookmarks;
+  const canPinAllBookmarks = can("pin_all_bookmarks") || !!data?.user?.canPinAllBookmarks;
   const canPinBookmarks = category ? canPinCategoryBookmarks : canPinAllBookmarks;
   const canManageUsers = can("manage_users");
   const canManageGroups = can("manage_groups");
@@ -912,7 +912,7 @@ export default function App() {
           {canManageSettings && view === "settings" ? (
             <main className="main-content">
               <SettingsPage
-                settings={{ siteMode: data!.siteMode, allowUserAddBookmarks: data!.allowUserAddBookmarks, allowUserPinCategoryBookmarks: data!.allowUserPinCategoryBookmarks, allowUserPinAllBookmarks: data!.allowUserPinAllBookmarks, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
+                settings={{ siteMode: data!.siteMode, cacheSiteIcons: data?.cacheSiteIcons ?? true }}
                 onChanged={refreshData}
                 onNotify={(message, error) => setToast({ message, error })}
               />

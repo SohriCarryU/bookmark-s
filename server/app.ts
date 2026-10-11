@@ -82,9 +82,6 @@ interface StoredUser extends Pick<User, 'id' | 'username' | 'role'> {
 interface PasswordState { passwordHash: string; sessionVersion: number }
 export interface SiteSettings {
   siteMode: 'public' | 'private'
-  allowUserAddBookmarks: boolean
-  allowUserPinCategoryBookmarks: boolean
-  allowUserPinAllBookmarks: boolean
   cacheSiteIcons: boolean
 }
 type AppEnv = { Variables: { user: User | null; settings: SiteSettings; visitorId: string; clientIp: string } }
@@ -224,13 +221,10 @@ export function createApp(db: Database, config: AppConfig) {
   const owner: User = { id: 'owner', username: config.adminUsername, role: 'admin', canAddBookmarks: true, canPinBookmarks: true, canPinCategoryBookmarks: true, canPinAllBookmarks: true, isOwner: true }
 
   async function getSettings(): Promise<SiteSettings> {
-    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','allow_user_add_bookmarks','allow_user_pin_category_bookmarks','allow_user_pin_all_bookmarks','cache_site_icons')")
+    const rows = await db.all<{ key: string; value: string }>("SELECT key,value FROM settings WHERE key IN ('site_mode','cache_site_icons')")
     const values = new Map(rows.map(row => [row.key, row.value]))
     return {
       siteMode: values.get('site_mode') === 'private' ? 'private' : 'public',
-      allowUserAddBookmarks: values.get('allow_user_add_bookmarks') === '1',
-      allowUserPinCategoryBookmarks: values.get('allow_user_pin_category_bookmarks') === '1',
-      allowUserPinAllBookmarks: values.get('allow_user_pin_all_bookmarks') === '1',
       cacheSiteIcons: values.get('cache_site_icons') !== '0',
     }
   }
@@ -290,10 +284,10 @@ export function createApp(db: Database, config: AppConfig) {
     for (const group of groups) group.permissions.forEach(permission => permissions.add(permission))
     return {
       id: user.id, username: user.username, role: user.role === 'admin' || groups.some(group => group.id === 'group-admin') || user.id === owner.id ? 'admin' : 'user',
-      canAddBookmarks: permissions.has('add_bookmarks') || settings.allowUserAddBookmarks,
-      canPinCategoryBookmarks: permissions.has('pin_category_bookmarks') || settings.allowUserPinCategoryBookmarks,
-      canPinAllBookmarks: permissions.has('pin_all_bookmarks') || settings.allowUserPinAllBookmarks,
-      canPinBookmarks: permissions.has('pin_category_bookmarks') || permissions.has('pin_all_bookmarks') || settings.allowUserPinCategoryBookmarks || settings.allowUserPinAllBookmarks,
+      canAddBookmarks: permissions.has('add_bookmarks'),
+      canPinCategoryBookmarks: permissions.has('pin_category_bookmarks'),
+      canPinAllBookmarks: permissions.has('pin_all_bookmarks'),
+      canPinBookmarks: permissions.has('pin_category_bookmarks') || permissions.has('pin_all_bookmarks'),
       isOwner: user.id === owner.id, groups, permissions: [...permissions],
     }
   }
@@ -712,23 +706,14 @@ export function createApp(db: Database, config: AppConfig) {
 
   app.patch('/api/settings', requirePermission('manage_settings'), async c => {
     const body = await readBody(c)
-    const keys = {
-      siteMode: 'site_mode', allowUserAddBookmarks: 'allow_user_add_bookmarks', allowUserPinCategoryBookmarks: 'allow_user_pin_category_bookmarks', allowUserPinAllBookmarks: 'allow_user_pin_all_bookmarks',
-      cacheSiteIcons: 'cache_site_icons',
-    } as const
+    const keys = { siteMode: 'site_mode', cacheSiteIcons: 'cache_site_icons' } as const
     const provided = Object.keys(body)
-    if (!provided.length || provided.some(key => !Object.hasOwn(keys, key) && key !== 'allowUserPinBookmarks')) throw new ApiError('没有可更新的配置字段')
+    if (!provided.length || provided.some(key => !Object.hasOwn(keys, key))) throw new ApiError('没有可更新的配置字段')
     if ('siteMode' in body && !['public', 'private'].includes(body.siteMode as string)) throw new ApiError('请选择公开或私人模式')
-    for (const key of ['allowUserAddBookmarks', 'allowUserPinCategoryBookmarks', 'allowUserPinAllBookmarks', 'allowUserPinBookmarks']) {
-      if (key in body && typeof body[key] !== 'boolean') throw new ApiError('用户权限开关格式不正确')
-    }
     if ('cacheSiteIcons' in body && typeof body.cacheSiteIcons !== 'boolean') throw new ApiError('图标缓存开关格式不正确')
-    const changes = provided.flatMap(key => key === 'allowUserPinBookmarks'
-      ? [['allow_user_pin_category_bookmarks', body[key]], ['allow_user_pin_all_bookmarks', body[key]]]
-      : [[keys[key as keyof typeof keys], body[key]]])
-    await db.batch(changes.map(([key, value]) => ({
+    await db.batch(provided.map(key => ({
       sql: 'INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      params: [key, typeof value === 'boolean' ? value ? '1' : '0' : value],
+      params: [keys[key as keyof typeof keys], typeof body[key] === 'boolean' ? body[key] ? '1' : '0' : body[key]],
     })))
     return c.json(await getSettings())
   })
@@ -831,9 +816,9 @@ export function createApp(db: Database, config: AppConfig) {
     const id = c.req.param('id')!
     const existing = await db.get<{ id: string; isSystem: number }>('SELECT id,is_system AS isSystem FROM user_groups WHERE id = ?', [id])
     if (!existing) throw new ApiError('这个用户组不存在', 404)
-    if (existing.isSystem) throw new ApiError('系统用户组不可修改', 403)
     const body = await readBody(c)
     if (!Object.keys(body).length || Object.keys(body).some(key => !['name', 'description', 'permissions', 'isDefault'].includes(key))) throw new ApiError('没有可更新的用户组字段')
+    if (existing.isSystem && (id !== 'group-user' || Object.keys(body).some(key => key !== 'permissions'))) throw new ApiError('系统用户组仅可调整普通用户组的权限', 403)
     const fields: string[] = []
     const values: unknown[] = []
     if ('name' in body) { fields.push('name = ?'); values.push(stringField(body.name, '用户组名称', 40)) }

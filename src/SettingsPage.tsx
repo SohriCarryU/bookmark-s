@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
-import { Check, Globe2, Image as ImageIcon, LoaderCircle, LockKeyhole, Save, Settings2, ShieldCheck } from "lucide-react";
+import { Check, Globe2, Image as ImageIcon, LoaderCircle, LockKeyhole, Save, Settings2 } from "lucide-react";
 import { api, messageOf } from "./api";
 import type { SiteSettings } from "./types";
 import WebDavSettings from "./WebDavSettings";
@@ -7,10 +7,8 @@ import S3Settings from "./S3Settings";
 import SettingsSection from "./SettingsSection";
 import "./settings.css";
 
-type PermissionKey = "allowUserAddBookmarks" | "allowUserPinCategoryBookmarks" | "allowUserPinAllBookmarks";
-
 function withDefaults(settings: SiteSettings): SiteSettings {
-  return { ...settings, cacheSiteIcons: settings.cacheSiteIcons ?? true, allowUserPinCategoryBookmarks: settings.allowUserPinCategoryBookmarks ?? settings.allowUserPinBookmarks ?? false, allowUserPinAllBookmarks: settings.allowUserPinAllBookmarks ?? settings.allowUserPinBookmarks ?? false };
+  return { ...settings, cacheSiteIcons: settings.cacheSiteIcons ?? true };
 }
 
 export default function SettingsPage({
@@ -27,12 +25,11 @@ export default function SettingsPage({
   const [mode, setMode] = useState(settings.siteMode);
   const [busy, setBusy] = useState<keyof SiteSettings | null>(null);
   const [modeError, setModeError] = useState("");
-  const [permissionError, setPermissionError] = useState("");
   const [iconCacheError, setIconCacheError] = useState("");
 
   useEffect(() => {
     setSaved(withDefaults(settings));
-  }, [settings.siteMode, settings.allowUserAddBookmarks, settings.allowUserPinBookmarks, settings.allowUserPinCategoryBookmarks, settings.allowUserPinAllBookmarks, settings.cacheSiteIcons]);
+  }, [settings.siteMode, settings.cacheSiteIcons]);
   useEffect(() => setMode(settings.siteMode), [settings.siteMode]);
 
   async function refreshSession() {
@@ -64,29 +61,6 @@ export default function SettingsPage({
     }
   }
 
-  async function togglePermission(key: PermissionKey) {
-    if (busy) return;
-    const previous = saved;
-    const enabled = !saved[key];
-    setSaved((current) => ({ ...current, [key]: enabled }));
-    setBusy(key);
-    setPermissionError("");
-    try {
-      const result = await api<SiteSettings>("/settings", {
-        method: "PATCH",
-        body: JSON.stringify({ [key]: enabled }),
-      });
-      setSaved(withDefaults(result));
-      onNotify(`已${enabled ? "开启" : "关闭"}用户${key === "allowUserAddBookmarks" ? "添加" : key === "allowUserPinCategoryBookmarks" ? "置顶文件夹" : "置顶全部"}书签权限`);
-      await refreshSession();
-    } catch (error) {
-      setSaved(previous);
-      setPermissionError(messageOf(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function toggleIconCache() {
     if (busy) return;
     const previous = saved;
@@ -110,17 +84,11 @@ export default function SettingsPage({
     }
   }
 
-  const permissions: { key: PermissionKey; label: string; description: string }[] = [
-    { key: "allowUserAddBookmarks", label: "允许用户添加书签", description: "开启后为所有已登录用户额外授予添加权限；关闭后仍可由用户组单独授予。" },
-    { key: "allowUserPinCategoryBookmarks", label: "允许用户置顶文件夹书签", description: "开启后为所有已登录用户额外授予在当前文件夹置顶书签的权限；关闭后仍可由用户组单独授予。" },
-    { key: "allowUserPinAllBookmarks", label: "允许用户置顶全部书签", description: "开启后为所有已登录用户额外授予在“全部书签”中置顶的权限；关闭后仍可由用户组单独授予。" },
-  ];
-
   return (
     <div className="settings-page">
       <header className="settings-page-heading">
         <span className="settings-heading-icon"><Settings2 size={24} /></span>
-        <div><h1>站点配置</h1><p>管理收藏馆的访问方式、用户权限、网站图标和数据备份。</p></div>
+        <div><h1>站点配置</h1><p>管理收藏馆的访问方式、网站图标和数据备份。</p></div>
       </header>
       <SettingsSection
         headingId={`${id}-mode-heading`}
@@ -153,28 +121,6 @@ export default function SettingsPage({
             </button>
           </div>
         </form>
-      </SettingsSection>
-      <SettingsSection
-        headingId={`${id}-permissions-heading`}
-        title="用户权限"
-        description="这是面向所有已登录用户的全局附加权限，调整后立即保存。更细致的权限请在用户组中配置。"
-        icon={<ShieldCheck size={19} />}
-      >
-        <div className="settings-permissions">
-          {permissions.map(({ key, label, description }) => (
-            <div className="settings-permission-row" key={key}>
-              <div className="settings-permission-copy">
-                <label id={`${id}-${key}-label`} htmlFor={`${id}-${key}`}>{label}</label>
-                <p id={`${id}-${key}-hint`}>{description}</p>
-              </div>
-              <button id={`${id}-${key}`} type="button" role="switch" className="settings-switch" aria-checked={saved[key]} aria-labelledby={`${id}-${key}-label`} aria-describedby={`${id}-${key}-hint`} aria-busy={busy === key} disabled={!!busy} onClick={() => void togglePermission(key)}>
-                <span className="settings-switch-thumb" aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-        </div>
-        <p className="settings-help">两项权限默认关闭。未开启添加权限的用户仍可浏览收藏和提交网站推荐。</p>
-        {permissionError && <p className="form-error" role="alert">{permissionError}</p>}
       </SettingsSection>
       <SettingsSection
         headingId={`${id}-icons-heading`}

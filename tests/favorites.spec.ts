@@ -41,7 +41,7 @@ test.describe('persisted personal favorites', () => {
   const userIds: string[] = [];
   const bookmarkIds: string[] = [];
   let originalTagIds: Set<string>;
-  let previousSettings: Pick<Bootstrap, 'siteMode' | 'allowUserAddBookmarks' | 'allowUserPinBookmarks'>;
+  let previousSettings: Pick<Bootstrap, 'siteMode'>;
 
   test.beforeAll(async ({ baseURL }) => {
     admin = await request.newContext({ baseURL, storageState: { cookies: fixtureCookies(baseURL), origins: [] } });
@@ -49,8 +49,8 @@ test.describe('persisted personal favorites', () => {
   test.beforeEach(async () => {
     const data = await bootstrap(admin);
     originalTagIds = new Set(data.tags.map(tag => tag.id));
-    previousSettings = { siteMode: data.siteMode, allowUserAddBookmarks: data.allowUserAddBookmarks, allowUserPinBookmarks: data.allowUserPinBookmarks };
-    expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
+    previousSettings = { siteMode: data.siteMode };
+    expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
   });
   test.afterEach(async () => {
     for (const id of bookmarkIds.splice(0)) expect((await admin.delete(`/api/bookmarks/${id}`)).ok()).toBeTruthy();
@@ -210,7 +210,6 @@ const actorB: User = { ...actorA, id: 'favorite-actor-b', username: 'favorites-b
 function mockBootstrap(user: User | null, favoriteBookmarkIds: string[] = []): Bootstrap {
   return {
     user, favoriteBookmarkIds: user ? favoriteBookmarkIds : [], siteMode: 'public', cacheSiteIcons: true, canViewContent: true,
-    allowUserAddBookmarks: false, allowUserPinBookmarks: false,
     categories: [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#54775E', sortOrder: 0 }],
     tags: [{ id: 'common', name: '共同标签', count: 2 }],
     bookmarks: ['One', 'Two'].map((name, index) => ({

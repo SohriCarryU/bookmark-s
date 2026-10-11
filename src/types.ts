@@ -58,10 +58,13 @@ export type UserGroup = {
 };
 export type SiteSettings = {
   siteMode: "public" | "private";
-  allowUserAddBookmarks: boolean;
-  /** @deprecated Compatibility alias for clients before scoped pin permissions. */
+  /** @deprecated User capabilities are configured through user groups. */
+  allowUserAddBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinCategoryBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinAllBookmarks?: boolean;
   cacheSiteIcons: boolean;
 };
@@ -84,9 +87,13 @@ export type Bootstrap = {
   favoriteBookmarkIds: string[];
   user: User | null;
   siteMode: "public" | "private";
-  allowUserAddBookmarks: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
+  allowUserAddBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinCategoryBookmarks?: boolean;
+  /** @deprecated User capabilities are configured through user groups. */
   allowUserPinAllBookmarks?: boolean;
   cacheSiteIcons: boolean;
   canViewContent: boolean;

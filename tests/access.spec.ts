@@ -7,7 +7,6 @@ const mockMember: User = { id: 'mock-member', username: 'mock-member', role: 'us
 function privateBootstrap(user: User | null): Bootstrap {
   return {
     siteMode: 'private', user, cacheSiteIcons: true, canViewContent: !!user, favoriteBookmarkIds: [],
-    allowUserAddBookmarks: user?.canAddBookmarks ?? false, allowUserPinBookmarks: user?.canPinBookmarks ?? false,
     categories: user ? [{ id: 'development', name: '开发工具', icon: 'Code2', color: '#6f77eb', sortOrder: 0 }] : [],
     tags: [],
     bookmarks: user ? [{
@@ -144,7 +143,7 @@ test.describe('persisted accounts and settings', () => {
   });
 
   test.beforeEach(async () => {
-    expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
+    expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
     const data: Bootstrap = await (await admin.get('/api/bootstrap')).json();
     originalBookmarkIds = new Set(data.bookmarks.map(bookmark => bookmark.id));
     originalTagIds = new Set(data.tags.map(tag => tag.id));
@@ -154,7 +153,7 @@ test.describe('persisted accounts and settings', () => {
 
   test.afterEach(async () => {
     // Always restore guest access, including when a private-mode assertion fails.
-    expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
+    expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
     const data: Bootstrap = await (await admin.get('/api/bootstrap')).json();
     for (const bookmark of data.bookmarks) {
       if (!originalBookmarkIds.has(bookmark.id)) expect((await admin.delete(`/api/bookmarks/${bookmark.id}`)).ok()).toBeTruthy();

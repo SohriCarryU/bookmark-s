@@ -32,6 +32,10 @@ function setup(wrapDatabase?: (db: Database) => Database, filename = ':memory:')
   return { db, request, login, createUser }
 }
 
+async function setGroupPermissions(db: Database, permissions: string[]) {
+  await db.run("UPDATE user_groups SET permissions = ? WHERE id = 'group-user'", [JSON.stringify(permissions)])
+}
+
 test('admin manages accounts with salted hashes, validated names, and an immutable environment owner', async t => {
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
@@ -67,7 +71,7 @@ test('admin manages accounts with salted hashes, validated names, and an immutab
   assert.deepEqual((await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()).user, reader)
 })
 
-test('user creation permission takes effect immediately and never grants management or author spoofing', async t => {
+test('user-group permissions take effect immediately and never grant management or author spoofing', async t => {
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
@@ -75,7 +79,7 @@ test('user creation permission takes effect immediately and never grants managem
   const cookie = await login(reader.username, password)
   assert.equal((await request('/api/bookmarks', 'POST', input)).status, 401)
   assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 403)
-  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)).status, 200)
+  await setGroupPermissions(db, ['add_bookmarks'])
   const added = await request('/api/bookmarks', 'POST', { ...input, createdBy: 'admin', role: 'admin', pinned: true }, cookie)
   assert.equal(added.status, 201)
   const { bookmark } = await added.json()
@@ -98,7 +102,7 @@ test('user creation permission takes effect immediately and never grants managem
     ['/api/settings', 'GET', undefined],
     ['/api/settings', 'PATCH', { siteMode: 'private' }],
   ] as const) assert.equal((await request(path, method, body, cookie)).status, 403, `${method} ${path}`)
-  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: false }, owner)).status, 200)
+  await setGroupPermissions(db, [])
   assert.equal((await request('/api/bookmarks', 'POST', { ...input, url: 'https://revoked.example' }, cookie)).status, 403)
   assert.equal((await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()).user.canAddBookmarks, false)
   assert.equal((await request(`/api/bookmarks/${bookmark.id}`, 'PATCH', { createdBy: 'forged' }, owner)).status, 400)
@@ -122,7 +126,7 @@ test('promotion and demotion change existing sessions immediately and admins alw
   assert.equal(admin.canPinBookmarks, true)
 })
 
-test('site permissions apply to all existing sessions independently and ignore old per-user grants', async t => {
+test('user-group permissions apply to existing sessions and ignore old per-user grants', async t => {
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
@@ -131,12 +135,13 @@ test('site permissions apply to all existing sessions independently and ignore o
   const cookies = [await login(first.username, password), await login(second.username, password)]
   // Old installations may still contain individual grants; these must not affect capabilities.
   await db.run('UPDATE users SET can_add_bookmarks = 1 WHERE id = ?', [first.id])
-  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
+  const defaults = { siteMode: 'public', cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
-  for (const [allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks] of [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, true], [false, false, false]]) {
-    const response = await request('/api/settings', 'PATCH', { allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks }, owner)
-    assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { siteMode: 'public', allowUserAddBookmarks, allowUserPinCategoryBookmarks, allowUserPinAllBookmarks, cacheSiteIcons: true })
+  for (const permissions of [[], ['add_bookmarks'], ['pin_category_bookmarks'], ['pin_all_bookmarks'], ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'], []]) {
+    await setGroupPermissions(db, permissions)
+    const allowUserAddBookmarks = permissions.includes('add_bookmarks')
+    const allowUserPinCategoryBookmarks = permissions.includes('pin_category_bookmarks')
+    const allowUserPinAllBookmarks = permissions.includes('pin_all_bookmarks')
     for (const [index, cookie] of cookies.entries()) {
       const state = await (await request('/api/bootstrap', 'GET', undefined, cookie)).json()
       assert.equal(state.user.canAddBookmarks, allowUserAddBookmarks)
@@ -164,16 +169,16 @@ test('settings partially update atomically and pin-only users cannot change any 
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
-  await request('/api/settings', 'PATCH', { allowUserPinCategoryBookmarks: true }, owner)
+  await setGroupPermissions(db, ['pin_category_bookmarks'])
   const reader = await createUser(owner)
   assert.equal(reader.canPinBookmarks, true)
   assert.equal(reader.canPinCategoryBookmarks, true)
   assert.equal(reader.canPinAllBookmarks, false)
   assert.equal(reader.canAddBookmarks, false)
   const cookie = await login(reader.username, password)
-  const settings = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: true, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
+  const settings = { siteMode: 'public', cacheSiteIcons: true }
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
-  for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinCategoryBookmarks: 1 }, { allowUserPinAllBookmarks: 'no' }, { siteMode: 'invalid', allowUserAddBookmarks: true }, { allowUserPinCategoryBookmarks: false, allowUserAddBookmarks: null }]) {
+  for (const changes of [{}, { unknown: true }, { allowUserAddBookmarks: 'true' }, { allowUserPinCategoryBookmarks: 1 }, { allowUserPinAllBookmarks: 'no' }, { siteMode: 'invalid' }, { allowUserPinCategoryBookmarks: false, cacheSiteIcons: null }]) {
     assert.equal((await request('/api/settings', 'PATCH', changes, owner)).status, 400)
     assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), settings)
   }
@@ -191,14 +196,14 @@ test('settings partially update atomically and pin-only users cannot change any 
   assert.equal((await request('/api/bookmarks/missing', 'PATCH', { pinned: true }, cookie)).status, 403)
   assert.equal((await request('/api/bookmarks/github', 'PATCH', { pinned: true })).status, 401)
   assert.equal((await request('/api/bookmarks/github', 'DELETE', undefined, cookie)).status, 403)
-  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, cookie)).status, 403)
+  assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: true }, cookie)).status, 403)
 })
 
 test('server icon caching defaults on and only administrators can change it with a boolean', async t => {
   const { db, request, login, createUser } = setup()
   t.after(() => db.close())
   const owner = await login()
-  const defaults = { siteMode: 'public', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true }
+  const defaults = { siteMode: 'public', cacheSiteIcons: true }
   assert.equal(await db.get("SELECT value FROM settings WHERE key = 'cache_site_icons'"), undefined)
   assert.equal((await (await request('/api/bootstrap')).json()).cacheSiteIcons, true)
   assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
@@ -207,7 +212,7 @@ test('server icon caching defaults on and only administrators can change it with
   const readerCookie = await login(reader.username, password)
   assert.equal((await request('/api/settings', 'PATCH', { cacheSiteIcons: false }, readerCookie)).status, 403)
   for (const cacheSiteIcons of [null, 0, 1, '', 'false', [], {}]) {
-    const response = await request('/api/settings', 'PATCH', { cacheSiteIcons, siteMode: 'private', allowUserAddBookmarks: true }, owner)
+    const response = await request('/api/settings', 'PATCH', { cacheSiteIcons, siteMode: 'private' }, owner)
     assert.equal(response.status, 400)
     assert.equal((await response.json()).error, '图标缓存开关格式不正确')
     assert.deepEqual(await (await request('/api/settings', 'GET', undefined, owner)).json(), defaults)
@@ -239,14 +244,13 @@ test('server icon caching choices survive unrelated setting edits and database r
   const owner = await state.login()
   for (const cacheSiteIcons of [false, true]) {
     assert.equal((await state.request('/api/settings', 'PATCH', { cacheSiteIcons }, owner)).status, 200)
-    assert.equal((await state.request('/api/settings', 'PATCH', { allowUserPinCategoryBookmarks: true }, owner)).status, 200)
+    await setGroupPermissions(state.db, ['pin_category_bookmarks'])
     state.db.close()
     state = setup(undefined, filename)
     const stored = await state.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'cache_site_icons'")
     assert.equal(stored?.value, cacheSiteIcons ? '1' : '0')
     const settings = await (await state.request('/api/settings', 'GET', undefined, owner)).json()
     assert.equal(settings.cacheSiteIcons, cacheSiteIcons)
-    assert.equal(settings.allowUserPinCategoryBookmarks, true)
     assert.equal((await (await state.request('/api/bootstrap')).json()).cacheSiteIcons, cacheSiteIcons)
   }
 })
@@ -272,7 +276,7 @@ test('user search filters names and roles while deletion preserves history and i
   assert.equal((await request(`/api/users/${secondAdmin.id}`, 'DELETE', undefined, adminCookie)).status, 403)
   assert.equal((await request(`/api/users/${alice.id}`, 'DELETE', undefined, cookie)).status, 403)
   assert.equal((await request(`/api/users/${alice.id}`, 'DELETE')).status, 401)
-  await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)
+  await setGroupPermissions(db, ['add_bookmarks'])
   const bookmark = (await (await request('/api/bookmarks', 'POST', input, cookie)).json()).bookmark
   const submission = (await (await request('/api/submissions', 'POST', { ...input, url: 'https://alice-pending.example' }, cookie)).json()).submission
   assert.equal((await request(`/api/users/${alice.id}`, 'DELETE', undefined, owner)).status, 200)
@@ -302,7 +306,7 @@ test('private mode returns an empty anonymous bootstrap and blocks every content
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'secret' }, owner)).status, 400)
   assert.equal((await request('/api/settings', 'PATCH', { siteMode: 'private' }, owner)).status, 200)
   assert.deepEqual(await (await request('/api/bootstrap')).json(), {
-    siteMode: 'private', allowUserAddBookmarks: false, allowUserPinCategoryBookmarks: false, allowUserPinAllBookmarks: false, cacheSiteIcons: true, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
+    siteMode: 'private', cacheSiteIcons: true, canViewContent: false, user: null, categories: [], bookmarks: [], tags: [], favoriteBookmarkIds: [],
     stats: { totalBookmarks: 0, totalClicks: 0, totalCategories: 0 },
   })
   for (const [path, method, body] of [
@@ -349,7 +353,7 @@ test('reset passwords invalidate existing cookies and only accept the new passwo
   t.after(() => db.close())
   const owner = await login()
   const reader = await createUser(owner, 'reader')
-  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)).status, 200)
+  await setGroupPermissions(db, ['add_bookmarks'])
   const cookie = await login(reader.username, password)
   assert.equal((await request(`/api/users/${reader.id}`, 'PATCH', { password: 'replacement-password' }, owner)).status, 200)
   assert.equal((await request('/api/bookmarks', 'POST', input, cookie)).status, 401)
@@ -426,7 +430,7 @@ test('account migration preserves old content and keeps mode, users and authors 
   }
 })
 
-test('site-permission migration preserves accounts and content while defaults stay disabled until explicitly enabled', async () => {
+test('legacy site permissions migrate into the default user group without changing accounts or content', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'bookmark-s-site-permissions-'))
   const filename = join(directory, 'data.sqlite')
   const old = new DatabaseSync(filename)
@@ -435,6 +439,7 @@ test('site-permission migration preserves accounts and content while defaults st
   }
   old.exec("INSERT INTO users (id,username,username_key,password_hash,can_add_bookmarks) VALUES ('legacy','Legacy','legacy','legacy-salted-hash',1)")
   old.exec("UPDATE settings SET value = 'private' WHERE key = 'site_mode'")
+  old.exec("INSERT INTO settings (key,value) VALUES ('allow_user_add_bookmarks','1'),('allow_user_pin_bookmarks','1')")
   old.exec("UPDATE bookmarks SET created_by = 'Legacy', clicks = 8899 WHERE id = 'github'")
   const originalUsers = old.prepare('SELECT * FROM users ORDER BY id').all()
   const originalBookmarks = old.prepare('SELECT *,NULL AS icon_url FROM bookmarks ORDER BY id').all()
@@ -443,15 +448,11 @@ test('site-permission migration preserves accounts and content while defaults st
   try {
     assert.deepEqual(await db.all('SELECT * FROM users ORDER BY id'), originalUsers)
     assert.deepEqual(await db.all('SELECT * FROM bookmarks ORDER BY id'), originalBookmarks)
-    for (const key of ['allow_user_add_bookmarks', 'allow_user_pin_bookmarks']) {
-      assert.equal((await db.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]))?.value, '0')
-    }
     assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'site_mode'"))?.value, 'private')
-    await db.run("UPDATE settings SET value = '1' WHERE key = 'allow_user_pin_bookmarks'")
+    assert.deepEqual(JSON.parse((await db.get<{ permissions: string }>("SELECT permissions FROM user_groups WHERE id = 'group-user'"))!.permissions), ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'])
     db.close()
     db = createSqliteDatabase(filename)
-    assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'allow_user_pin_bookmarks'"))?.value, '1')
-    assert.equal((await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'allow_user_add_bookmarks'"))?.value, '0')
+    assert.deepEqual(JSON.parse((await db.get<{ permissions: string }>("SELECT permissions FROM user_groups WHERE id = 'group-user'"))!.permissions), ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'])
     assert.deepEqual(await db.all('SELECT * FROM users ORDER BY id'), originalUsers)
     assert.deepEqual(await db.all('SELECT * FROM bookmarks ORDER BY id'), originalBookmarks)
   } finally {

@@ -16,7 +16,8 @@ test.beforeEach(async () => {
   originalTagIds = new Set(data.tags.map(tag => tag.id));
   const { users }: { users: User[] } = await (await admin.get('/api/users')).json();
   originalUserIds = new Set(users.map(user => user.id));
-  expect((await admin.patch('/api/settings', { data: { siteMode: 'public', allowUserAddBookmarks: true, allowUserPinBookmarks: true } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'] } })).ok()).toBeTruthy();
 });
 test.afterEach(async () => {
   const data = await bootstrap();
@@ -30,7 +31,7 @@ test.afterEach(async () => {
   for (const user of users) {
     if (!originalUserIds.has(user.id)) expect((await admin.delete(`/api/users/${user.id}`)).ok()).toBeTruthy();
   }
-  expect((await admin.patch('/api/settings', { data: { allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: [] } })).ok()).toBeTruthy();
 });
 test.afterAll(async () => { await admin.dispose(); });
 

@@ -143,7 +143,7 @@ test('creation records trusted actor identity and retains it after account delet
   t.after(() => db.close())
   const owner = await login()
   const member = await account(owner, 'contributor')
-  assert.equal((await request('/api/settings', 'PATCH', { allowUserAddBookmarks: true }, owner)).status, 200)
+  assert.equal((await request('/api/user-groups/group-user', 'PATCH', { permissions: ['add_bookmarks'] }, owner)).status, 200)
   const created = await mutate(owner, 'create', '/api/bookmarks', 'POST', { ...input, actorName: 'forged', actorId: 'owner', createdBy: 'forged' }, member.cookie)
   assert.equal(created.operation.actorName, 'contributor')
   assert.equal(created.operation.actorId, member.user.id)

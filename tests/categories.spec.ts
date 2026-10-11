@@ -49,7 +49,7 @@ test.afterEach(async () => {
   for (const user of users) {
     if (!original.users.has(user.id)) expect((await admin.delete(`/api/users/${user.id}`)).ok()).toBeTruthy();
   }
-  expect((await admin.patch('/api/settings', { data: { allowUserAddBookmarks: false, allowUserPinBookmarks: false } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/settings', { data: { siteMode: 'public' } })).ok()).toBeTruthy();
 });
 test.afterAll(async () => { await admin.dispose(); });
 
@@ -264,7 +264,7 @@ test('folder deletion migrates exclusive hidden bookmarks and recommendations, p
   const target = await category('E2E Target Folder', '#5689BD');
   const remaining = await category('E2E Remaining Folder', '#54775E');
   const user = await createUser('category-migration-member');
-  expect((await admin.patch('/api/settings', { data: { allowUserAddBookmarks: true, allowUserPinBookmarks: true } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'] } })).ok()).toBeTruthy();
   const member = await request.newContext({ baseURL, storageState: { cookies: fixtureCookies(baseURL, user), origins: [] } });
   try {
     async function bookmark(title: string, categoryIds: string[], tags: string[] = []): Promise<Bookmark> {
@@ -330,7 +330,7 @@ test('folder deletion migrates exclusive hidden bookmarks and recommendations, p
 test('visitors and members see the shared order but cannot reorder create edit delete or preview folders even with add and pin permissions', async ({ browser, baseURL }) => {
   const folder = await category('E2E Protected Folder');
   const user = await createUser('category-permission-member');
-  expect((await admin.patch('/api/settings', { data: { allowUserAddBookmarks: true, allowUserPinBookmarks: true } })).ok()).toBeTruthy();
+  expect((await admin.patch('/api/user-groups/group-user', { data: { permissions: ['add_bookmarks', 'pin_category_bookmarks', 'pin_all_bookmarks'] } })).ok()).toBeTruthy();
   const before = (await bootstrap()).categories;
   const reordered = [...before].reverse();
   expect((await admin.put('/api/categories/order', { data: { categoryIds: reordered.map(item => item.id) } })).ok()).toBeTruthy();

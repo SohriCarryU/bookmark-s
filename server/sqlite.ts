@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { Database, Statement } from './db.js'
-import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql, sitePermissionsMigrationSql, collectionsMigrationSql, operationsMigrationSql, categoryOperationsMigrationSql, personalFavoritesMigrationSql, bookmarkIconsMigrationSql, userGroupsMigrationSql, scopedPinPermissionsMigrationSql } from './schema.js'
+import { schemaSql, seedSql, tagsMigrationSql, accountsMigrationSql, sitePermissionsMigrationSql, collectionsMigrationSql, operationsMigrationSql, categoryOperationsMigrationSql, personalFavoritesMigrationSql, bookmarkIconsMigrationSql, userGroupsMigrationSql, scopedPinPermissionsMigrationSql, groupSitePermissionsMigrationSql } from './schema.js'
 
 export function createSqliteDatabase(filename: string): Database & { close(): void } {
   const sqlite = new DatabaseSync(filename)
@@ -105,6 +105,16 @@ export function createSqliteDatabase(filename: string): Database & { close(): vo
   if (!scopedPinsMigrated) {
     try {
       sqlite.exec(`BEGIN IMMEDIATE; ${scopedPinPermissionsMigrationSql} COMMIT;`)
+    } catch (error) {
+      sqlite.exec('ROLLBACK')
+      sqlite.close()
+      throw error
+    }
+  }
+  const groupSitePermissionsMigrated = sqlite.prepare("SELECT value FROM settings WHERE key = 'migration_0012_group_site_permissions'").get()
+  if (!groupSitePermissionsMigrated) {
+    try {
+      sqlite.exec(`BEGIN IMMEDIATE; ${groupSitePermissionsMigrationSql} COMMIT;`)
     } catch (error) {
       sqlite.exec('ROLLBACK')
       sqlite.close()
